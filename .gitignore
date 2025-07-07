@@ -8,5 +8,6 @@ __pycache__/
 venv/
 # exclude logs
 logs/
+bot_activity.log
 # exclude IDE specific files
 .idea/
