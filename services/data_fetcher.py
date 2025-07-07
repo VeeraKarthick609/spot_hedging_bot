@@ -52,6 +52,32 @@ class DataFetcher:
         except Exception as e:
             log.error(f"Error fetching historical data for {symbol} on {exchange_name}: {e}")
             return None
+        
+    async def fetch_option_instruments(self, currency: str = 'BTC') -> list:
+        """Fetches all active option instruments for a given currency from Deribit."""
+        deribit = self.exchanges['deribit']
+        try:
+            await deribit.load_markets()
+            instruments = [
+                symbol for symbol in deribit.symbols 
+                if symbol.startswith(currency) and deribit.markets[symbol]['option']
+            ]
+            log.info(f"Fetched {len(instruments)} option instruments for {currency}.")
+            return instruments
+        except Exception as e:
+            log.error(f"Error fetching option instruments for {currency}: {e}")
+            return []
+    
+    async def fetch_option_ticker(self, option_symbol: str) -> dict | None:
+        """Fetches the full ticker for a specific option symbol from Deribit."""
+        deribit = self.exchanges['deribit']
+        try:
+            ticker = await deribit.fetch_ticker(option_symbol)
+            print(f"Fetched ticker for option {option_symbol}: {ticker}")
+            return ticker
+        except Exception as e:
+            log.error(f"Error fetching ticker for option {option_symbol}: {e}")
+            return None
 
 
     async def close_connections(self):

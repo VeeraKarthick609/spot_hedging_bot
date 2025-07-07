@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler
 
 # Import configuration, handlers, and services
 import config
@@ -11,7 +11,9 @@ from bot.handlers import (
     monitor_risk_command,
     stop_monitoring_command,
     button_callback_handler,
-    risk_check_job
+    risk_check_job,
+    hedge_options_command, select_strategy, select_expiry, select_strike, confirm_hedge, cancel_conversation,
+    SELECT_STRATEGY, SELECT_EXPIRY, SELECT_STRIKE, CONFIRM_HEDGE 
 )
 from services.data_fetcher import data_fetcher_instance
 
@@ -35,6 +37,20 @@ def main() -> None:
     # Create the Application and pass it your bot's token.
     application = Application.builder().token(config.TELEGRAM_TOKEN).build()
 
+    # --- Setup Conversation Handler for Options Hedging ---
+    options_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("hedge_options", hedge_options_command)],
+        states={
+            SELECT_STRATEGY: [CallbackQueryHandler(select_strategy, pattern="^strategy_")],
+            SELECT_EXPIRY: [CallbackQueryHandler(select_expiry, pattern="^expiry_")],
+            SELECT_STRIKE: [CallbackQueryHandler(select_strike, pattern="^strike_")],
+            CONFIRM_HEDGE: [CallbackQueryHandler(confirm_hedge, pattern="^confirm_hedge")],
+        },
+        fallbacks=[CallbackQueryHandler(cancel_conversation, pattern="^cancel")],
+    )
+
+    application.add_handler(options_conv_handler)
+
     # --- Register Command Handlers ---
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
@@ -56,7 +72,6 @@ def main() -> None:
     application.run_polling()
 
     # --- Graceful Shutdown ---
-    # ... (shutdown logic remains unchanged) ...
     log.info("Bot is shutting down...")
     loop = asyncio.get_event_loop()
     if loop.is_running():

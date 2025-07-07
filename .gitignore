@@ -11,3 +11,5 @@ logs/
 bot_activity.log
 # exclude IDE specific files
 .idea/
+
+README.md

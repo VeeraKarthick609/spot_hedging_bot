@@ -3,6 +3,8 @@ import pandas as pd
 import logging
 import time
 import asyncio
+from py_vollib.black_scholes.greeks.analytical import delta, gamma, vega, theta
+from datetime import datetime
 
 # Import our real data source
 from services.data_fetcher import data_fetcher_instance
@@ -87,6 +89,29 @@ class RiskEngine:
             "required_hedge_usd": required_hedge_usd,
             "required_hedge_contracts": required_hedge_contracts
         }
+    
+    def calculate_option_greeks(self, underlying_price: float, option_ticker: dict) -> dict | None:
+        """
+        Calculates the greeks for a single option using its live ticker data.
+        
+        :param underlying_price: Current price of the asset (e.g., BTC).
+        :param option_ticker: The full ticker dictionary from data_fetcher.fetch_option_ticker.
+        :return: A dictionary containing the calculated greeks.
+        """
+        try:
+            # Get greeks from the correct path in the data structure
+            greeks_data = option_ticker.get("info", {}).get("greeks", {})
+            
+            return {
+                "delta": float(greeks_data.get('delta', 0)),  # Delta per $1 price change (already correct scale)
+                "gamma": float(greeks_data.get('gamma', 0)),  # Gamma per $1 price change (already correct scale)
+                "vega": float(greeks_data.get("vega", 0)),    # Vega per 1% vol change (already correct scale)
+                "theta": float(greeks_data.get("theta", 0)),  # Theta per day (already correct scale)
+                "price": float(option_ticker.get('mark_price') or option_ticker.get('info', {}).get('mark_price', 0)) * float(underlying_price),  # Deribit price is in BTC, convert to USD
+            }
+        except Exception as e:
+            log.error(f"Error calculating greeks for {option_ticker.get('info', {}).get('instrument_name', 'N/A')}: {e}")
+            return None
 
 # Create a single instance
 risk_engine_instance = RiskEngine()
