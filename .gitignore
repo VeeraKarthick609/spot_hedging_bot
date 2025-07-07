@@ -1,2 +1,12 @@
-venv
 .env
+
+# exlcude pycache directories
+__pycache__/
+# exclude compiled Python files
+*.pyc
+# exclude virtual environment directories
+venv/
+# exclude logs
+logs/
+# exclude IDE specific files
+.idea/

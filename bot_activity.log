@@ -1,0 +1,275 @@
+2025-07-07 16:32:45,202 - __main__ - INFO - Starting bot...
+2025-07-07 16:32:45,609 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-07-07 16:32:45,610 - __main__ - INFO - Risk checking job scheduled to run every 60 seconds.
+2025-07-07 16:32:45,610 - __main__ - INFO - Bot is polling for updates...
+2025-07-07 16:32:50,090 - apscheduler.scheduler - INFO - Added job "risk_check_job" to job store "default"
+2025-07-07 16:32:50,091 - apscheduler.scheduler - INFO - Scheduler started
+2025-07-07 16:32:50,091 - telegram.ext.Application - INFO - Application started
+2025-07-07 16:32:55,615 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:03:55 UTC)" (scheduled at 2025-07-07 11:02:55.608272+00:00)
+2025-07-07 16:32:55,616 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:03:55 UTC)" executed successfully
+2025-07-07 16:33:55,621 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:04:55 UTC)" (scheduled at 2025-07-07 11:03:55.608272+00:00)
+2025-07-07 16:33:55,622 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:04:55 UTC)" executed successfully
+2025-07-07 16:34:55,615 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:05:55 UTC)" (scheduled at 2025-07-07 11:04:55.608272+00:00)
+2025-07-07 16:34:55,615 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:05:55 UTC)" executed successfully
+2025-07-07 16:35:55,614 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:06:55 UTC)" (scheduled at 2025-07-07 11:05:55.608272+00:00)
+2025-07-07 16:35:55,615 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:06:55 UTC)" executed successfully
+2025-07-07 16:36:21,651 - telegram.ext.Application - ERROR - No error handlers are registered, logging exception.
+Traceback (most recent call last):
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_application.py", line 1195, in process_update
+    await coroutine
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_basehandler.py", line 153, in handle_update
+    return await self.callback(update, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\bot\handlers.py", line 32, in start_command
+    await update.message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_message.py", line 1095, in reply_text
+    return await self.get_bot().send_message(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_extbot.py", line 2631, in send_message
+    return await super().send_message(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 519, in decorator
+    result = await func(self, *args, **kwargs)  # skipcq: PYL-E1102
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 840, in send_message
+    return await self._send_message(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_extbot.py", line 529, in _send_message
+    result = await super()._send_message(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 697, in _send_message
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 607, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_extbot.py", line 347, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 635, in _do_post
+    return await request.post(
+           ^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\request\_baserequest.py", line 168, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\request\_baserequest.py", line 325, in _request_wrapper
+    raise BadRequest(message)
+telegram.error.BadRequest: Can't parse entities: can't find end of the entity starting at byte offset 324
+2025-07-07 16:36:55,623 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:07:55 UTC)" (scheduled at 2025-07-07 11:06:55.608272+00:00)
+2025-07-07 16:36:55,624 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:07:55 UTC)" executed successfully
+2025-07-07 16:37:55,613 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:08:55 UTC)" (scheduled at 2025-07-07 11:07:55.608272+00:00)
+2025-07-07 16:37:55,614 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:08:55 UTC)" executed successfully
+2025-07-07 16:38:20,022 - telegram.ext.Application - INFO - Application is stopping. This might take a moment.
+2025-07-07 16:38:20,023 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2025-07-07 16:38:20,023 - telegram.ext.Application - INFO - Application.stop() complete
+2025-07-07 16:38:20,023 - __main__ - INFO - Bot is shutting down...
+2025-07-07 16:38:24,424 - __main__ - INFO - Starting bot...
+2025-07-07 16:38:24,825 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-07-07 16:38:24,825 - __main__ - INFO - Risk checking job scheduled to run every 60 seconds.
+2025-07-07 16:38:24,825 - __main__ - INFO - Bot is polling for updates...
+2025-07-07 16:38:25,578 - apscheduler.scheduler - INFO - Added job "risk_check_job" to job store "default"
+2025-07-07 16:38:25,578 - apscheduler.scheduler - INFO - Scheduler started
+2025-07-07 16:38:25,578 - telegram.ext.Application - INFO - Application started
+2025-07-07 16:38:34,841 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:09:34 UTC)" (scheduled at 2025-07-07 11:08:34.824978+00:00)
+2025-07-07 16:38:34,842 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:09:34 UTC)" executed successfully
+2025-07-07 16:38:44,693 - telegram.ext.Application - ERROR - No error handlers are registered, logging exception.
+Traceback (most recent call last):
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_application.py", line 1195, in process_update
+    await coroutine
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_basehandler.py", line 153, in handle_update
+    return await self.callback(update, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\bot\handlers.py", line 32, in start_command
+    await update.message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_message.py", line 1095, in reply_text
+    return await self.get_bot().send_message(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_extbot.py", line 2631, in send_message
+    return await super().send_message(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 519, in decorator
+    result = await func(self, *args, **kwargs)  # skipcq: PYL-E1102
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 840, in send_message
+    return await self._send_message(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_extbot.py", line 529, in _send_message
+    result = await super()._send_message(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 697, in _send_message
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 607, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_extbot.py", line 347, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 635, in _do_post
+    return await request.post(
+           ^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\request\_baserequest.py", line 168, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\request\_baserequest.py", line 325, in _request_wrapper
+    raise BadRequest(message)
+telegram.error.BadRequest: Can't parse entities: can't find end of the entity starting at byte offset 324
+2025-07-07 16:39:34,829 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:10:34 UTC)" (scheduled at 2025-07-07 11:09:34.824978+00:00)
+2025-07-07 16:39:34,829 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:10:34 UTC)" executed successfully
+2025-07-07 16:39:38,493 - telegram.ext.Application - INFO - Application is stopping. This might take a moment.
+2025-07-07 16:39:38,493 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2025-07-07 16:39:38,493 - telegram.ext.Application - INFO - Application.stop() complete
+2025-07-07 16:39:38,493 - __main__ - INFO - Bot is shutting down...
+2025-07-07 16:39:41,252 - __main__ - INFO - Starting bot...
+2025-07-07 16:39:41,656 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-07-07 16:39:41,656 - __main__ - INFO - Risk checking job scheduled to run every 60 seconds.
+2025-07-07 16:39:41,656 - __main__ - INFO - Bot is polling for updates...
+2025-07-07 16:39:42,432 - apscheduler.scheduler - INFO - Added job "risk_check_job" to job store "default"
+2025-07-07 16:39:42,432 - apscheduler.scheduler - INFO - Scheduler started
+2025-07-07 16:39:42,432 - telegram.ext.Application - INFO - Application started
+2025-07-07 16:39:49,476 - telegram.ext.Application - ERROR - No error handlers are registered, logging exception.
+Traceback (most recent call last):
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_application.py", line 1195, in process_update
+    await coroutine
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_basehandler.py", line 153, in handle_update
+    return await self.callback(update, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\bot\handlers.py", line 32, in start_command
+    await update.message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_message.py", line 1095, in reply_text
+    return await self.get_bot().send_message(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_extbot.py", line 2631, in send_message
+    return await super().send_message(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 519, in decorator
+    result = await func(self, *args, **kwargs)  # skipcq: PYL-E1102
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 840, in send_message
+    return await self._send_message(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_extbot.py", line 529, in _send_message
+    result = await super()._send_message(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 697, in _send_message
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 607, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_extbot.py", line 347, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\_bot.py", line 635, in _do_post
+    return await request.post(
+           ^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\request\_baserequest.py", line 168, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\request\_baserequest.py", line 325, in _request_wrapper
+    raise BadRequest(message)
+telegram.error.BadRequest: Can't parse entities: can't find end of the entity starting at byte offset 320
+2025-07-07 16:39:51,666 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:10:51 UTC)" (scheduled at 2025-07-07 11:09:51.656721+00:00)
+2025-07-07 16:39:51,666 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:10:51 UTC)" executed successfully
+2025-07-07 16:40:51,658 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:11:51 UTC)" (scheduled at 2025-07-07 11:10:51.656721+00:00)
+2025-07-07 16:40:51,658 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:11:51 UTC)" executed successfully
+2025-07-07 16:41:34,304 - telegram.ext.Application - INFO - Application is stopping. This might take a moment.
+2025-07-07 16:41:34,305 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2025-07-07 16:41:34,306 - telegram.ext.Application - INFO - Application.stop() complete
+2025-07-07 16:41:34,306 - __main__ - INFO - Bot is shutting down...
+2025-07-07 16:41:36,622 - __main__ - INFO - Starting bot...
+2025-07-07 16:41:37,045 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-07-07 16:41:37,045 - __main__ - INFO - Risk checking job scheduled to run every 60 seconds.
+2025-07-07 16:41:37,045 - __main__ - INFO - Bot is polling for updates...
+2025-07-07 16:41:37,793 - apscheduler.scheduler - INFO - Added job "risk_check_job" to job store "default"
+2025-07-07 16:41:37,793 - apscheduler.scheduler - INFO - Scheduler started
+2025-07-07 16:41:37,793 - telegram.ext.Application - INFO - Application started
+2025-07-07 16:41:47,050 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:12:47 UTC)" (scheduled at 2025-07-07 11:11:47.043606+00:00)
+2025-07-07 16:41:47,050 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:12:47 UTC)" executed successfully
+2025-07-07 16:42:47,052 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:13:47 UTC)" (scheduled at 2025-07-07 11:12:47.043606+00:00)
+2025-07-07 16:42:47,053 - bot.handlers - INFO - Running REAL-TIME risk check job for 1 users.
+2025-07-07 16:42:47,053 - telegram.ext.Application - ERROR - No error handlers are registered, logging exception.
+Traceback (most recent call last):
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_jobqueue.py", line 898, in _run
+    await self.callback(context)
+  File "D:\spot_hedging_bot\bot\handlers.py", line 127, in risk_check_job
+    spot_price, perp_price = await asyncio.gather(spot_price_task, perp_price_task)
+                                   ^^^^^^^
+NameError: name 'asyncio' is not defined
+2025-07-07 16:42:47,056 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:13:47 UTC)" executed successfully
+2025-07-07 16:43:10,287 - telegram.ext.Application - INFO - Application is stopping. This might take a moment.
+2025-07-07 16:43:10,287 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2025-07-07 16:43:10,287 - telegram.ext.Application - INFO - Application.stop() complete
+2025-07-07 16:43:10,288 - __main__ - INFO - Bot is shutting down...
+2025-07-07 16:52:27,699 - __main__ - INFO - Starting bot...
+2025-07-07 16:52:28,109 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-07-07 16:52:28,109 - __main__ - INFO - Risk checking job scheduled to run every 60 seconds.
+2025-07-07 16:52:28,109 - __main__ - INFO - Bot is polling for updates...
+2025-07-07 16:52:29,145 - apscheduler.scheduler - INFO - Added job "risk_check_job" to job store "default"
+2025-07-07 16:52:29,146 - apscheduler.scheduler - INFO - Scheduler started
+2025-07-07 16:52:29,146 - telegram.ext.Application - INFO - Application started
+2025-07-07 16:52:38,114 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:23:38 UTC)" (scheduled at 2025-07-07 11:22:38.108330+00:00)
+2025-07-07 16:52:38,115 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:23:38 UTC)" executed successfully
+2025-07-07 16:53:38,132 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:24:38 UTC)" (scheduled at 2025-07-07 11:23:38.108330+00:00)
+2025-07-07 16:53:38,132 - bot.handlers - INFO - Running REAL-TIME risk check job for 1 users.
+2025-07-07 16:53:39,866 - bot.handlers - INFO - RISK THRESHOLD BREACHED for user 5063784984. Delta: $108632.50, Threshold: $100.00
+2025-07-07 16:53:39,866 - core.risk_engine - INFO - Cache miss or expired for bybit:BTC/USDT:BTC/USDT:USDT. Fetching fresh historical data...
+2025-07-07 16:53:40,122 - services.data_fetcher - INFO - Successfully fetched 90 historical data points for BTC/USDT from bybit
+2025-07-07 16:53:40,204 - services.data_fetcher - INFO - Successfully fetched 90 historical data points for BTC/USDT:USDT from bybit
+2025-07-07 16:53:40,222 - core.risk_engine - INFO - Calculated new beta for bybit:BTC/USDT:BTC/USDT:USDT: 0.9985
+2025-07-07 16:53:40,223 - core.risk_engine - INFO - Hedge calculation: spot_delta_usd=$108,632.50, beta=0.9985, required_hedge_contracts=-0.9990
+2025-07-07 16:53:40,967 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:24:38 UTC)" executed successfully
+2025-07-07 16:53:48,392 - telegram.ext.Application - ERROR - No error handlers are registered, logging exception.
+Traceback (most recent call last):
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_application.py", line 1195, in process_update
+    await coroutine
+  File "D:\spot_hedging_bot\venv\Lib\site-packages\telegram\ext\_basehandler.py", line 153, in handle_update
+    return await self.callback(update, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\spot_hedging_bot\bot\handlers.py", line 190, in button_callback_handler
+    _, asset, size = data.split('_')
+    ^^^^^^^^^^^^^^
+ValueError: too many values to unpack (expected 3)
+2025-07-07 16:54:38,110 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:25:38 UTC)" (scheduled at 2025-07-07 11:24:38.108330+00:00)
+2025-07-07 16:54:38,111 - bot.handlers - INFO - Running REAL-TIME risk check job for 1 users.
+2025-07-07 16:54:38,581 - bot.handlers - INFO - RISK THRESHOLD BREACHED for user 5063784984. Delta: $108690.20, Threshold: $100.00
+2025-07-07 16:54:38,581 - core.risk_engine - INFO - Using cached beta for bybit:BTC/USDT:BTC/USDT:USDT: 0.9985
+2025-07-07 16:54:38,582 - core.risk_engine - INFO - Hedge calculation: spot_delta_usd=$108,690.20, beta=0.9985, required_hedge_contracts=-0.9988
+2025-07-07 16:54:39,426 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:25:38 UTC)" executed successfully
+2025-07-07 16:55:38,118 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:26:38 UTC)" (scheduled at 2025-07-07 11:25:38.108330+00:00)
+2025-07-07 16:55:38,119 - bot.handlers - INFO - Running REAL-TIME risk check job for 1 users.
+2025-07-07 16:55:38,415 - bot.handlers - INFO - RISK THRESHOLD BREACHED for user 5063784984. Delta: $108672.40, Threshold: $100.00
+2025-07-07 16:55:38,415 - core.risk_engine - INFO - Using cached beta for bybit:BTC/USDT:BTC/USDT:USDT: 0.9985
+2025-07-07 16:55:38,415 - core.risk_engine - INFO - Hedge calculation: spot_delta_usd=$108,672.40, beta=0.9985, required_hedge_contracts=-0.9989
+2025-07-07 16:55:39,182 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:26:38 UTC)" executed successfully
+2025-07-07 16:56:38,111 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:27:38 UTC)" (scheduled at 2025-07-07 11:26:38.108330+00:00)
+2025-07-07 16:56:38,112 - bot.handlers - INFO - Running REAL-TIME risk check job for 1 users.
+2025-07-07 16:56:39,462 - bot.handlers - INFO - RISK THRESHOLD BREACHED for user 5063784984. Delta: $108714.80, Threshold: $100.00
+2025-07-07 16:56:39,462 - core.risk_engine - INFO - Using cached beta for bybit:BTC/USDT:BTC/USDT:USDT: 0.9985
+2025-07-07 16:56:39,462 - core.risk_engine - INFO - Hedge calculation: spot_delta_usd=$108,714.80, beta=0.9985, required_hedge_contracts=-0.9989
+2025-07-07 16:56:40,325 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:27:38 UTC)" executed successfully
+2025-07-07 16:57:38,125 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:28:38 UTC)" (scheduled at 2025-07-07 11:27:38.108330+00:00)
+2025-07-07 16:57:38,125 - bot.handlers - INFO - Running REAL-TIME risk check job for 1 users.
+2025-07-07 16:57:38,933 - bot.handlers - INFO - RISK THRESHOLD BREACHED for user 5063784984. Delta: $108787.50, Threshold: $100.00
+2025-07-07 16:57:38,933 - core.risk_engine - INFO - Using cached beta for bybit:BTC/USDT:BTC/USDT:USDT: 0.9985
+2025-07-07 16:57:38,935 - core.risk_engine - INFO - Hedge calculation: spot_delta_usd=$108,787.50, beta=0.9985, required_hedge_contracts=-0.9989
+2025-07-07 16:57:40,075 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:28:38 UTC)" executed successfully
+2025-07-07 16:58:38,117 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:29:38 UTC)" (scheduled at 2025-07-07 11:28:38.108330+00:00)
+2025-07-07 16:58:38,117 - bot.handlers - INFO - Running REAL-TIME risk check job for 1 users.
+2025-07-07 16:58:39,414 - bot.handlers - INFO - RISK THRESHOLD BREACHED for user 5063784984. Delta: $108802.50, Threshold: $100.00
+2025-07-07 16:58:39,414 - core.risk_engine - INFO - Using cached beta for bybit:BTC/USDT:BTC/USDT:USDT: 0.9985
+2025-07-07 16:58:39,414 - core.risk_engine - INFO - Hedge calculation: spot_delta_usd=$108,802.50, beta=0.9985, required_hedge_contracts=-0.9989
+2025-07-07 16:58:40,295 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:29:38 UTC)" executed successfully
+2025-07-07 16:59:38,117 - apscheduler.executors.default - INFO - Running job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:30:38 UTC)" (scheduled at 2025-07-07 11:29:38.108330+00:00)
+2025-07-07 16:59:38,117 - bot.handlers - INFO - Running REAL-TIME risk check job for 1 users.
+2025-07-07 16:59:38,669 - bot.handlers - INFO - RISK THRESHOLD BREACHED for user 5063784984. Delta: $108774.70, Threshold: $100.00
+2025-07-07 16:59:38,669 - core.risk_engine - INFO - Using cached beta for bybit:BTC/USDT:BTC/USDT:USDT: 0.9985
+2025-07-07 16:59:38,670 - core.risk_engine - INFO - Hedge calculation: spot_delta_usd=$108,774.70, beta=0.9985, required_hedge_contracts=-0.9989
+2025-07-07 16:59:39,551 - apscheduler.executors.default - INFO - Job "risk_check_job (trigger: interval[0:01:00], next run at: 2025-07-07 11:30:38 UTC)" executed successfully
+2025-07-07 17:00:03,464 - telegram.ext.Application - INFO - Application is stopping. This might take a moment.
+2025-07-07 17:00:03,465 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2025-07-07 17:00:03,465 - telegram.ext.Application - INFO - Application.stop() complete
+2025-07-07 17:00:03,466 - __main__ - INFO - Bot is shutting down...
+2025-07-07 17:00:03,612 - ccxt.base.exchange - WARNING - bybit requires to release all resources with an explicit call to the .close() coroutine. If you are using the exchange instance with async coroutines, add `await exchange.close()` to your code into a place when you're done with the exchange and don't need the exchange instance anymore (at the end of your async coroutine).
+2025-07-07 17:00:03,614 - asyncio - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x000002147FC2AA90>
