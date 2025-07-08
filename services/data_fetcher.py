@@ -9,6 +9,7 @@ class DataFetcher:
         self.exchanges = {
             'bybit': ccxt.bybit({'options': {'defaultType': 'spot'}}), # Default to spot
             'deribit': ccxt.deribit(),
+            'okx': ccxt.okx(), # for smart order routing
         }
         log.info("DataFetcher initialized with exchanges: %s", list(self.exchanges.keys()))
 
@@ -79,9 +80,22 @@ class DataFetcher:
             log.error(f"Error fetching ticker for option {option_symbol}: {e}")
             return None
 
+    async def fetch_order_book(self, exchange_name: str, symbol: str, limit: int = 25) -> dict | None:
+        """Fetches the order book for a given symbol."""
+        exchange_name = exchange_name.lower()
+        if exchange_name not in self.exchanges:
+            log.error(f"Exchange '{exchange_name}' not supported for order book.")
+            return None
+        
+        exchange = self.exchanges[exchange_name]
+        try:
+            order_book = await exchange.fetch_order_book(symbol, limit=limit)
+            return order_book
+        except Exception as e:
+            log.error(f"Error fetching order book for {symbol} on {exchange_name}: {e}")
+            return None
 
     async def close_connections(self):
-        # ... (this method remains unchanged) ...
         for name, exchange in self.exchanges.items():
             await exchange.close()
 

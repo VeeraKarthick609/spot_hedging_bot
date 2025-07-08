@@ -93,7 +93,6 @@ async def stop_monitoring_command(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (this function remains unchanged from Phase 1) ...
     try:
         exchange_name = context.args[0]
         symbol = context.args[1]
@@ -220,7 +219,6 @@ async def select_strike(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     # Parse and format expiry from YYMMDD to DMMMMYY (e.g., 250708 -> 8JUL25)
     raw_expiry = context.user_data['expiry']  # assume in YYMMDD format like 250708
-    print(f"Raw expiry: {raw_expiry}")  # Debugging line
 
     # Parse as YYMMDD format
     expiry_date = datetime.strptime(raw_expiry, "%y%m%d")
@@ -229,8 +227,8 @@ async def select_strike(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     month = expiry_date.strftime("%b").upper()  # e.g., 'JUL'
     year = expiry_date.strftime("%y")  # e.g., '25'
 
-    formatted_expiry = f"{day}{month}{year}"  # 8JUL25 ✅
-    print(f"Formatted expiry: {formatted_expiry}")  # Debugging line
+    formatted_expiry = f"{day}{month}{year}"  
+    
     # Construct the instrument name    
     option_type = 'P' if context.user_data['strategy'] == 'strategy_put' else 'C'
     instrument_name = f"{asset}-{formatted_expiry}-{strike}-{option_type}"
@@ -300,10 +298,48 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.clear()
     return ConversationHandler.END
 
+async def portfolio_risk_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Provides a comprehensive risk report for the user's portfolio."""
+    chat_id = update.effective_chat.id
+    if chat_id not in user_positions:
+        await update.message.reply_text("❌ No position found. Use `/monitor_risk` to set one up.")
+        return
+        
+    await update.message.reply_text("Crunching the numbers... generating your portfolio risk report.", parse_mode=ParseMode.MARKDOWN)
+
+    # For this demo, we assume the portfolio is just the one monitored position.
+    # A full system would pull all positions from a database.
+    position = user_positions[chat_id]
+    portfolio = [{'type': 'spot', 'asset': position['asset'], 'size': position['size']}]
+    
+    # Get live prices
+    btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+    if not btc_price:
+        await update.message.reply_text("❌ Could not fetch live price data.")
+        return
+        
+    prices = {'BTC/USDT': btc_price}
+    
+    # Calculate portfolio risk and VaR
+    risk_data = await risk_engine_instance.calculate_portfolio_risk(portfolio, prices)
+    var_data = await risk_engine_instance.calculate_historical_var(portfolio, prices)
+
+    report_text = (
+        f"**📊 Portfolio Risk Report**\n\n"
+        f"**Total Portfolio Delta:** `${risk_data['total_delta_usd']:,.2f}`\n"
+        f"_(This is your total directional exposure to the market.)_\n\n"
+        f"--- **Value at Risk (VaR)** ---\n"
+        f"**1-Day 95% VaR:** `${var_data:,.2f}`\n"
+        f"_(Based on historical simulation, there is a 5% chance your portfolio could lose at least this amount in the next 24 hours.)_"
+    )
+    
+    await update.message.reply_text(report_text, parse_mode=ParseMode.MARKDOWN)
+
 # --- BACKGROUND JOB ---
 async def risk_check_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    This job runs periodically to check risk for all monitored positions using LIVE data.
+    This job runs periodically to check risk for all monitored positions.
+    IT NOW INCLUDES SMART EXECUTION ANALYSIS IN THE INITIAL ALERT.
     """
     if not user_positions:
         return
@@ -311,78 +347,88 @@ async def risk_check_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     log.info(f"Running REAL-TIME risk check job for {len(user_positions)} users.")
 
     for chat_id, position in user_positions.items():
-        # 1. Fetch current LIVE prices for spot and perp
+        # ... (Steps 1 & 2: Fetch prices and calculate delta remain the same) ...
         spot_symbol = position['spot_symbol']
-        perp_symbol = position['perp_symbol']
+        spot_price = await data_fetcher_instance.get_price('bybit', spot_symbol)
         
-        spot_price_task = data_fetcher_instance.get_price('bybit', spot_symbol)
-        perp_price_task = data_fetcher_instance.get_price('bybit', perp_symbol)
-        spot_price, perp_price = await asyncio.gather(spot_price_task, perp_price_task)
-        
-        if spot_price is None or perp_price is None:
-            log.warning(f"Could not fetch live prices for {position['asset']}. Skipping check for user {chat_id}.")
+        if spot_price is None:
+            log.warning(f"Could not fetch spot price. Skipping check for user {chat_id}.")
             continue
 
-        # 2. Calculate current portfolio delta (exposure)
         current_delta_usd = position['size'] * spot_price
 
         # 3. Check if delta exceeds the user's threshold
         if abs(current_delta_usd) > position['threshold']:
-            log.info(f"RISK THRESHOLD BREACHED for user {chat_id}. Delta: ${current_delta_usd:.2f}, Threshold: ${position['threshold']:.2f}")
+            log.info(f"RISK THRESHOLD BREACHED for user {chat_id}. Delta: ${current_delta_usd:.2f}")
 
-            # --- Trigger Alert with Real-Time Calculations ---
-
-            # 4. Get the current hedge ratio (beta) from the Risk Engine
+            # --- START OF NEW, UPFRONT ANALYSIS ---
+            
+            # 4. Get hedge recommendation (size of the trade)
+            perp_symbol = position['perp_symbol']
+            perp_price = await data_fetcher_instance.get_price('bybit', perp_symbol) # Use one price for size calculation
             beta = await risk_engine_instance.calculate_beta(spot_symbol, perp_symbol)
-            if beta is None:
-                log.error(f"Could not calculate beta for {spot_symbol}/{perp_symbol}. Cannot recommend hedge.")
-                await context.bot.send_message(chat_id, text="⚠️ Could not generate a hedge recommendation due to an internal error calculating beta.")
+
+            if perp_price is None or beta is None:
+                log.error(f"Could not get perp_price or beta for {spot_symbol}. Cannot create alert.")
                 continue
 
-            # 5. Get the hedge recommendation from the Risk Engine using the calculated beta
             hedge_details = risk_engine_instance.calculate_perp_hedge(
                 spot_position_usd=current_delta_usd,
                 perp_price=perp_price,
                 beta=beta
             )
-            hedge_contracts = hedge_details['required_hedge_contracts']
+            hedge_contracts_size = hedge_details['required_hedge_contracts']
 
-            # --- 6. Prepare and send the detailed, live-data alert message ---
+            # 5. Find the best execution plan for that trade size
+            execution_plan = await risk_engine_instance.find_best_execution_venue(perp_symbol, hedge_contracts_size)
+            
+            if not execution_plan:
+                # If we can't find a venue, send a simpler alert
+                await context.bot.send_message(chat_id, "🚨 Risk Alert! Could not determine an execution plan. Please check market liquidity.")
+                continue
+
+            # --- 6. Prepare the NEW, DETAILED alert message ---
             message = (
-                f"🚨 **Real-Time Risk Alert: {position['asset']}** 🚨\n\n"
-                f"Your portfolio's delta exposure has exceeded its threshold.\n\n"
-                f"**Position Size:** `{position['size']}` {position['asset']}\n"
-                f"**Live Spot Price:** `${spot_price:,.2f}`\n"
-                f"**Current Delta:** `${current_delta_usd:,.2f}`\n"
-                f"**Risk Threshold:** `${position['threshold']:,.2f}`\n\n"
-                f"--- **Hedge Recommendation** ---\n"
-                f"**Hedge Ratio (Beta):** `{beta:.4f}`\n"
-                f"**Action:** Short `{abs(hedge_contracts):.4f}` of `{position['perp_symbol']}`"
+                f"🚨 **Actionable Risk Alert: {position['asset']}** 🚨\n\n"
+                f"Your delta exposure has exceeded its `${position['threshold']:,.2f}` threshold.\n\n"
+                f"**Current Delta:** `${current_delta_usd:,.2f}`\n\n"
+                f"--- **Smart Execution Plan** ---\n"
+                f"**Action:** Short `{abs(hedge_contracts_size):.4f}` {position['asset']}-PERP\n"
+                f"**Best Venue:** `{execution_plan['venue'].upper()}`\n"
+                f"**Est. Fill Price:** `${execution_plan['avg_fill_price']:,.2f}`\n"
+                f"**Est. Slippage Cost:** `${abs(execution_plan['slippage_usd']):,.2f}`\n"
+                f"**Est. Trading Fee:** `${execution_plan['fees_usd']:,.2f}`"
             )
 
+            # The callback data now includes the chosen venue and trade details
+            callback_data_str = f"hedge_confirm_{execution_plan['venue']}_{hedge_contracts_size:.4f}"
+
             keyboard = [
-                [InlineKeyboardButton("✅ Hedge Now (Simulated)", callback_data=f"hedge_now_{position['asset']}_{hedge_contracts:.4f}")],
+                [InlineKeyboardButton(f"✅ Hedge on {execution_plan['venue'].upper()} (Simulated)", callback_data=callback_data_str)],
                 [InlineKeyboardButton("Dismiss", callback_data="dismiss_alert")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             await context.bot.send_message(chat_id, text=message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
-
+# --- UPDATE BUTTON HANDLER ---
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Parses the CallbackQuery and updates the message text."""
+    """Parses the CallbackQuery. The heavy lifting is already done."""
     query = update.callback_query
-    await query.answer() # Acknowledge the button press
+    await query.answer()
 
     data = query.data
 
-    if data.startswith("hedge_now"):
-        # This is a SIMULATED action for Phase 2. Phase 4 will execute real trades.
-        _, _, asset, size = data.split('_')  # Fixed: use '_' and account for all parts
+    if data.startswith("hedge_confirm"):
+        # The plan was already calculated and presented to the user.
+        # We just need to confirm it.
+        # Format: "hedge_confirm_bybit_-0.4996"
+        _, _, venue, size_str = data.split('_')
+        
         response_text = (
             f"✅ **Hedge Action Confirmed (Simulated)**\n\n"
-            f"A market order to **short {abs(float(size))} {asset}** would be placed now.\n\n"
-            f"_(This is a demo. No real trade was executed.)_"
+            f"A market order to **short {abs(float(size_str))}** on **{venue.upper()}** has been simulated.\n\n"
+            f"Your portfolio is now being re-assessed."
         )
         await query.edit_message_text(text=response_text, parse_mode=ParseMode.MARKDOWN)
 

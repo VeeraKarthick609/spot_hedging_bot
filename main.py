@@ -12,6 +12,7 @@ from bot.handlers import (
     stop_monitoring_command,
     button_callback_handler,
     risk_check_job,
+    portfolio_risk_command,
     hedge_options_command, select_strategy, select_expiry, select_strike, confirm_hedge, cancel_conversation,
     SELECT_STRATEGY, SELECT_EXPIRY, SELECT_STRIKE, CONFIRM_HEDGE 
 )
@@ -56,6 +57,7 @@ def main() -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("price", price_command))
     application.add_handler(CommandHandler("monitor_risk", monitor_risk_command))
+    application.add_handler(CommandHandler("portfolio_risk", portfolio_risk_command))
     application.add_handler(CommandHandler("stop_monitoring", stop_monitoring_command))
 
     # --- Register Callback Handler for Buttons ---
