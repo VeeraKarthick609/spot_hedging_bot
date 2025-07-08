@@ -14,4 +14,5 @@ bot_activity.log
 
 # exclude db
 hedge_bot.db
+data/
 README.md
