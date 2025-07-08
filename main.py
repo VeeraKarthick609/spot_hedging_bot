@@ -5,18 +5,15 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Conv
 # Import configuration, handlers, and services
 import config
 from bot.handlers import (
-    start_command, 
-    help_command, 
-    price_command,
-    monitor_risk_command,
-    stop_monitoring_command,
-    button_callback_handler,
-    risk_check_job,
-    portfolio_risk_command,
-    hedge_options_command, select_strategy, select_expiry, select_strike, confirm_hedge, cancel_conversation,
-    SELECT_STRATEGY, SELECT_EXPIRY, SELECT_STRIKE, CONFIRM_HEDGE 
+    start_command, help_command, price_command, monitor_risk_command,
+    stop_monitoring_command, button_callback_handler, risk_check_job,
+    portfolio_risk_command, hedge_options_command, select_strategy, select_expiry,
+    select_strike, confirm_hedge, cancel_conversation, SELECT_STRATEGY, 
+    SELECT_EXPIRY, SELECT_STRIKE, CONFIRM_HEDGE, auto_hedge_command,
+    hedge_status_command, hedge_history_command
 )
 from services.data_fetcher import data_fetcher_instance
+from database import db_manager
 
 # --- Setup Centralized Logging ---
 # ... (logging setup remains unchanged) ...
@@ -59,6 +56,9 @@ def main() -> None:
     application.add_handler(CommandHandler("monitor_risk", monitor_risk_command))
     application.add_handler(CommandHandler("portfolio_risk", portfolio_risk_command))
     application.add_handler(CommandHandler("stop_monitoring", stop_monitoring_command))
+    application.add_handler(CommandHandler("auto_hedge", auto_hedge_command))
+    application.add_handler(CommandHandler("hedge_status", hedge_status_command))
+    application.add_handler(CommandHandler("hedge_history", hedge_history_command))
 
     # --- Register Callback Handler for Buttons ---
     application.add_handler(CallbackQueryHandler(button_callback_handler))

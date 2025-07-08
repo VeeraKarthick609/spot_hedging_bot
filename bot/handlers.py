@@ -1,3 +1,4 @@
+import json
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
@@ -9,6 +10,7 @@ from datetime import datetime
 # Import our services and core logic
 from services.data_fetcher import data_fetcher_instance
 from core.risk_engine import risk_engine_instance
+from database import db_manager
 
 log = logging.getLogger(__name__)
 
@@ -21,55 +23,66 @@ user_positions = {}
 SELECT_STRATEGY, SELECT_EXPIRY, SELECT_STRIKE, CONFIRM_HEDGE = range(4)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a welcome message when the /start command is issued."""
+    """Sends an updated welcome message with all commands."""
     user = update.effective_user
-    welcome_message = (
-        f"👋 Hello {user.first_name}!\n\n"
-        f"Welcome to the *Spot Exposure Hedging Bot*.\n\n"
-        f"*Available Commands:*\n"
-        f"🔹 `/monitor_risk <ASSET> <SIZE> <THRESHOLD_USD>`\n"
-        f"   Example: `/monitor_risk BTC 1.5 500`\n"
-        f"🔹 `/stop_monitoring` - Stop tracking your position.\n"
-        f"🔹 `/price <exchange> <symbol>` - Get a price.\n"
-        f"   Example: `/price bybit BTC/USDT`\n"
-        f"🔹 `/help` - Show this help message."
+    help_text = (
+        f"👋 Hello {user.first_name}! Welcome to the **Spot Exposure Hedging Bot**.\n\n"
+        "**CONFIGURATION**\n"
+        "`/monitor_risk <ASSET> <SIZE> <THRESHOLD_USD>` - Start monitoring a position.\n"
+        "`/auto_hedge <on|off>` - Toggle fully automated hedging.\n"
+        "`/stop_monitoring` - Stop all monitoring.\n\n"
+        "**ACTIONS & REPORTING**\n"
+        "`/hedge_now <ASSET> <SIZE>` - Manually trigger a hedge.\n"
+        "`/hedge_options` - Start an interactive options hedge.\n"
+        "`/hedge_status` - View your current settings.\n"
+        "`/hedge_history` - View recent hedge actions.\n"
+        "`/portfolio_risk` - Get a VaR and risk report.\n\n"
+        "**UTILITIES**\n"
+        "`/price <exchange> <symbol>` - Get a price.\n"
+        "`/help` - Show this message."
     )
-    await update.message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
-
+    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await start_command(update, context)
 
 
 async def monitor_risk_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sets up monitoring for a user's spot position."""
+    """
+    Sets up or updates monitoring for a user's spot position.
+    This version correctly formats the data for the database and preserves the user's
+    existing auto-hedge setting upon updates.
+    """
     chat_id = update.effective_chat.id
     try:
-        # Example: /monitor_risk BTC 1.5 500
         asset = context.args[0].upper()
-        size = float(context.args[1])
-        threshold = float(context.args[2])
+        size_str = context.args[1]
+        threshold_str = context.args[2]
 
-        # For simplicity, we hardcode the symbols. A real app would map assets to symbols.
-        if asset != "BTC":
-            await update.message.reply_text("❌ Sorry, only BTC monitoring is supported in this demo.")
-            return
-            
+        # IMPROVEMENT: Preserve the user's existing auto-hedge setting.
+        # First, try to fetch the current settings from the database.
+        existing_position = db_manager.get_position(chat_id)
+        
+        # If a setting exists, use its auto_hedge status. Otherwise, default to 0 (off).
+        current_auto_hedge_status = existing_position['auto_hedge_enabled'] if existing_position else 0
+
+        # This dictionary now uses the correct key 'auto_hedge_enabled' to match the database.
         position_data = {
+            "chat_id": chat_id,
             "asset": asset,
-            "spot_symbol": "BTC/USDT",
-            "perp_symbol": "BTC/USDT:USDT", # Bybit's linear perp symbol
-            "size": size,
-            "threshold": threshold,
+            "spot_symbol": f"{asset}/USDT",
+            "perp_symbol": f"{asset}/USDT:USDT",
+            "size": float(size_str),
+            "threshold": float(threshold_str),
+            "auto_hedge_enabled": current_auto_hedge_status  # Preserve the existing setting
         }
-        user_positions[chat_id] = position_data
+        
+        db_manager.upsert_position(chat_id, position_data)
         
         await update.message.reply_text(
-            f"✅ **Monitoring Enabled**\n\n"
-            f"**Asset:** `{asset}`\n"
-            f"**Position Size:** `{size}`\n"
-            f"**Delta Threshold:** `${threshold:,.2f}`\n\n"
-            f"I will now check your risk exposure every minute.",
+            "✅ Monitoring settings have been updated.\n\n"
+            "Your auto-hedge setting has been preserved. "
+            "Use `/hedge_status` to see your current configuration.",
             parse_mode=ParseMode.MARKDOWN
         )
 
@@ -83,14 +96,79 @@ async def monitor_risk_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def stop_monitoring_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Stops monitoring for a user."""
-    chat_id = update.effective_chat.id
-    if chat_id in user_positions:
-        del user_positions[chat_id]
-        await update.message.reply_text("✅ Monitoring has been stopped.")
-    else:
-        await update.message.reply_text("ℹ️ You are not currently monitoring any position.")
+    db_manager.delete_position(update.effective_chat.id)
+    await update.message.reply_text("✅ All monitoring has been stopped and settings cleared.")
 
+async def auto_hedge_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    position = db_manager.get_position(chat_id)
+    if not position:
+        await update.message.reply_text("❌ Please set up a position with `/monitor_risk` first.")
+        return
+    try:
+        status = context.args[0].lower()
+        if status not in ['on', 'off']: raise ValueError()
+        
+        position['auto_hedge_enabled'] = 1 if status == 'on' else 0
+        db_manager.upsert_position(chat_id, position)
+        
+        mode = "ENABLED" if status == 'on' else "DISABLED"
+        await update.message.reply_text(f"✅ **Automated hedging is now {mode}.**")
+    except (IndexError, ValueError):
+        await update.message.reply_text("❌ Usage: `/auto_hedge <on|off>`")
+
+async def hedge_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    position = db_manager.get_position(update.effective_chat.id)
+    if not position:
+        await update.message.reply_text("ℹ️ You are not currently monitoring any position.")
+        return
+    mode = "ON" if position['auto_hedge_enabled'] else "OFF"
+    status_text = (
+        f"**📋 Hedging Status**\n\n"
+        f"**Asset:** `{position['asset']}`\n"
+        f"**Size:** `{position['size']}`\n"
+        f"**Delta Threshold:** `${position['threshold']:,.2f}`\n"
+        f"**Auto-Hedge Mode:** `{mode}`"
+    )
+    await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
+
+async def hedge_history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    history = db_manager.get_hedge_history(update.effective_chat.id)
+    if not history:
+        await update.message.reply_text("ℹ️ No hedge history found.")
+        return
+    
+    report = "**📜 Recent Hedge History**\n\n"
+    for item in history:
+        details = json.loads(item['details'])
+        ts = datetime.strptime(item['timestamp'], '%Y-%m-%d %H:%M:%S').strftime('%d-%b %H:%M')
+        cost = details.get('total_cost_usd', 0)
+        report += (
+            f"**{ts}** - `{item['action'].upper()}`\n"
+            f"  - Size: `{abs(item['size']):.4f}`\n"
+            f"  - Cost: `${cost:,.2f}`\n"
+            f"  - Venue: `{details.get('venue', 'N/A').upper()}`\n---\n"
+        )
+    await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
+
+async def execute_hedge_logic(context: ContextTypes.DEFAULT_TYPE, chat_id: int, size: float, asset: str):
+    """A reusable function to perform and log a simulated hedge."""
+    perp_symbol = f"{asset}/USDT:USDT"
+    execution_plan = await risk_engine_instance.find_best_execution_venue(perp_symbol, size)
+    
+    if not execution_plan:
+        await context.bot.send_message(chat_id, "❌ Hedge failed: Could not determine an execution plan.")
+        return None
+
+    # Log the successful simulated hedge to the database
+    db_manager.log_hedge(
+        chat_id=chat_id,
+        hedge_type='perp',
+        action='short' if size < 0 else 'long',
+        size=size,
+        details=json.dumps(execution_plan)
+    )
+    return execution_plan
 
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
@@ -338,99 +416,143 @@ async def portfolio_risk_command(update: Update, context: ContextTypes.DEFAULT_T
 # --- BACKGROUND JOB ---
 async def risk_check_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    This job runs periodically to check risk for all monitored positions.
-    IT NOW INCLUDES SMART EXECUTION ANALYSIS IN THE INITIAL ALERT.
+    The main background job. It runs periodically, checks risk for all monitored positions
+    from the database, and handles automated hedging or sends interactive alerts.
     """
-    if not user_positions:
-        return
+    all_positions = db_manager.get_all_positions()
+    if not all_positions:
+        return  # No positions to check, exit quietly.
 
-    log.info(f"Running REAL-TIME risk check job for {len(user_positions)} users.")
+    log.info(f"Running risk check job for {len(all_positions)} positions stored in the database.")
 
-    for chat_id, position in user_positions.items():
-        # ... (Steps 1 & 2: Fetch prices and calculate delta remain the same) ...
+    for position in all_positions:
+        chat_id = position['chat_id']
         spot_symbol = position['spot_symbol']
+        perp_symbol = position['perp_symbol']
+        
+        # 1. Fetch live spot price for the current position's asset.
         spot_price = await data_fetcher_instance.get_price('bybit', spot_symbol)
         
         if spot_price is None:
-            log.warning(f"Could not fetch spot price. Skipping check for user {chat_id}.")
+            log.warning(f"Could not fetch spot price for {spot_symbol}. Skipping check for chat_id {chat_id}.")
             continue
 
+        # 2. Calculate the current delta exposure of the spot position.
+        # Note: A more advanced version would also subtract the delta of existing hedges.
         current_delta_usd = position['size'] * spot_price
 
-        # 3. Check if delta exceeds the user's threshold
+        # 3. Check if the exposure exceeds the user-defined threshold.
         if abs(current_delta_usd) > position['threshold']:
-            log.info(f"RISK THRESHOLD BREACHED for user {chat_id}. Delta: ${current_delta_usd:.2f}")
+            log.info(f"RISK THRESHOLD BREACHED for chat_id {chat_id}. Delta: ${current_delta_usd:,.2f}, Threshold: ${position['threshold']:.2f}")
 
-            # --- START OF NEW, UPFRONT ANALYSIS ---
+            # 4. Gather necessary data for the hedge calculation.
+            perp_price_task = data_fetcher_instance.get_price('bybit', perp_symbol)
+            beta_task = risk_engine_instance.calculate_beta(spot_symbol, perp_symbol)
+            perp_price, beta = await asyncio.gather(perp_price_task, beta_task)
             
-            # 4. Get hedge recommendation (size of the trade)
-            perp_symbol = position['perp_symbol']
-            perp_price = await data_fetcher_instance.get_price('bybit', perp_symbol) # Use one price for size calculation
-            beta = await risk_engine_instance.calculate_beta(spot_symbol, perp_symbol)
-
             if perp_price is None or beta is None:
-                log.error(f"Could not get perp_price or beta for {spot_symbol}. Cannot create alert.")
+                log.error(f"Could not fetch perp price or calculate beta for {perp_symbol}. Cannot proceed with hedge for {chat_id}.")
                 continue
 
-            hedge_details = risk_engine_instance.calculate_perp_hedge(
-                spot_position_usd=current_delta_usd,
-                perp_price=perp_price,
-                beta=beta
-            )
-            hedge_contracts_size = hedge_details['required_hedge_contracts']
+            # 5. Get the recommended hedge size from the risk engine.
+            hedge_details = risk_engine_instance.calculate_perp_hedge(current_delta_usd, perp_price, beta)
+            hedge_contracts = hedge_details['required_hedge_contracts']
 
-            # 5. Find the best execution plan for that trade size
-            execution_plan = await risk_engine_instance.find_best_execution_venue(perp_symbol, hedge_contracts_size)
-            
-            if not execution_plan:
-                # If we can't find a venue, send a simpler alert
-                await context.bot.send_message(chat_id, "🚨 Risk Alert! Could not determine an execution plan. Please check market liquidity.")
-                continue
+            # --- 6. CRITICAL LOGIC: Decide between Auto-Hedge and Manual Alert ---
+            if position['auto_hedge_enabled']:
+                # AUTOMATED HEDGING PATH
+                log.info(f"Auto-hedging is ON for {chat_id}. Executing hedge automatically...")
+                await context.bot.send_message(chat_id, text="🚨 **Auto-Hedge Triggered!**\nFinding best execution venue...", parse_mode=ParseMode.MARKDOWN)
+                
+                # Use the reusable logic to execute and log the hedge.
+                execution_plan = await execute_hedge_logic(context, chat_id, hedge_contracts, position['asset'])
+                
+                if execution_plan:
+                    response_text = (
+                        f"✅ **Auto-Hedge Executed (Simulated)**\n\n"
+                        f"**Action:** Short `{abs(hedge_contracts):.4f}` {position['asset']}-PERP\n"
+                        f"**Venue:** `{execution_plan['venue'].upper()}`\n"
+                        f"**Est. Total Cost:** `${execution_plan['total_cost_usd']:,.2f}`\n\n"
+                        f"This action has been logged. Use `/hedge_history` to view."
+                    )
+                    await context.bot.send_message(chat_id, text=response_text, parse_mode=ParseMode.MARKDOWN)
+            else:
+                # MANUAL HEDGING PATH
+                log.info(f"Auto-hedging is OFF for {chat_id}. Sending interactive alert.")
+                message = (
+                    f"🚨 **Risk Alert: {position['asset']}** 🚨\n\n"
+                    f"Your portfolio's delta exposure has exceeded its threshold.\n\n"
+                    f"**Current Delta:** `${current_delta_usd:,.2f}`\n"
+                    f"**Risk Threshold:** `${position['threshold']:,.2f}`\n\n"
+                    f"**Recommended Action:**\n"
+                    f"Short `{abs(hedge_contracts):.4f}` of `{position['perp_symbol']}`\n"
+                )
+                
+                keyboard = [
+                    [InlineKeyboardButton("✅ Hedge Now (Simulated)", callback_data=f"hedge_now_{position['asset']}_{hedge_contracts:.4f}")],
+                    [InlineKeyboardButton("Dismiss", callback_data="dismiss_alert")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
 
-            # --- 6. Prepare the NEW, DETAILED alert message ---
-            message = (
-                f"🚨 **Actionable Risk Alert: {position['asset']}** 🚨\n\n"
-                f"Your delta exposure has exceeded its `${position['threshold']:,.2f}` threshold.\n\n"
-                f"**Current Delta:** `${current_delta_usd:,.2f}`\n\n"
-                f"--- **Smart Execution Plan** ---\n"
-                f"**Action:** Short `{abs(hedge_contracts_size):.4f}` {position['asset']}-PERP\n"
-                f"**Best Venue:** `{execution_plan['venue'].upper()}`\n"
-                f"**Est. Fill Price:** `${execution_plan['avg_fill_price']:,.2f}`\n"
-                f"**Est. Slippage Cost:** `${abs(execution_plan['slippage_usd']):,.2f}`\n"
-                f"**Est. Trading Fee:** `${execution_plan['fees_usd']:,.2f}`"
-            )
-
-            # The callback data now includes the chosen venue and trade details
-            callback_data_str = f"hedge_confirm_{execution_plan['venue']}_{hedge_contracts_size:.4f}"
-
-            keyboard = [
-                [InlineKeyboardButton(f"✅ Hedge on {execution_plan['venue'].upper()} (Simulated)", callback_data=callback_data_str)],
-                [InlineKeyboardButton("Dismiss", callback_data="dismiss_alert")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            await context.bot.send_message(chat_id, text=message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+                await context.bot.send_message(chat_id, text=message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
 # --- UPDATE BUTTON HANDLER ---
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Parses the CallbackQuery. The heavy lifting is already done."""
+    """
+    Parses all CallbackQuery events from inline buttons.
+    """
     query = update.callback_query
+    # Acknowledge the button press to remove the "loading" icon on the user's side.
     await query.answer()
 
     data = query.data
 
-    if data.startswith("hedge_confirm"):
-        # The plan was already calculated and presented to the user.
-        # We just need to confirm it.
-        # Format: "hedge_confirm_bybit_-0.4996"
-        _, _, venue, size_str = data.split('_')
+    if data.startswith("hedge_now_"):
+        # This block handles the "Hedge Now" button from a manual risk alert.
+        await query.edit_message_text(text="Finding best execution venue and estimating costs...")
         
-        response_text = (
-            f"✅ **Hedge Action Confirmed (Simulated)**\n\n"
-            f"A market order to **short {abs(float(size_str))}** on **{venue.upper()}** has been simulated.\n\n"
-            f"Your portfolio is now being re-assessed."
-        )
-        await query.edit_message_text(text=response_text, parse_mode=ParseMode.MARKDOWN)
+        try:
+            _, _, asset, size_str = data.split('_')
+            size = float(size_str)
+            chat_id = query.message.chat.id
+            
+            # Use the centralized, reusable logic to perform the hedge simulation and DB logging.
+            execution_plan = await execute_hedge_logic(context, chat_id, size, asset)
+            
+            if execution_plan:
+                response_text = (
+                    f"✅ <b>Hedge Execution Plan (Simulated)</b>\n\n"
+                    f"<b>Action:</b> Short <code>{abs(size):.4f}</code> {asset}-PERP\n\n"
+                    f"--- <b>Smart Order Routing Analysis</b> ---\n"
+                    f"<b>Chosen Venue:</b> <code>{execution_plan['venue'].upper()}</code> (Best price)\n"
+                    f"<b>Est. Fill Price:</b> <code>${execution_plan['avg_fill_price']:,.2f}</code>\n"
+                    f"<b>Est. Slippage:</b> <code>${execution_plan['slippage_usd']:,.4f}</code>\n"
+                    f"<b>Est. Taker Fee:</b> <code>${execution_plan['fees_usd']:,.4f}</code>\n\n"
+                    f"<i>(This is a simulation. The action has been logged in /hedge_history.)</i>"
+                )
+                
+                try:
+                    await query.edit_message_text(text=response_text, parse_mode=ParseMode.HTML)
+                except Exception as e:
+                    # Fallback to plain text if HTML fails
+                    plain_text = (
+                        f"✅ Hedge Execution Plan (Simulated)\n\n"
+                        f"Action: Short {abs(size):.4f} {asset}-PERP\n\n"
+                        f"--- Smart Order Routing Analysis ---\n"
+                        f"Chosen Venue: {execution_plan['venue'].upper()} (Best price)\n"
+                        f"Est. Fill Price: ${execution_plan['avg_fill_price']:,.2f}\n"
+                        f"Est. Slippage: ${execution_plan['slippage_usd']:,.4f}\n"
+                        f"Est. Taker Fee: ${execution_plan['fees_usd']:,.4f}\n\n"
+                        f"(This is a simulation. The action has been logged in /hedge_history.)"
+                    )
+                    await query.edit_message_text(text=plain_text)
+            else:
+                await query.edit_message_text(text="❌ Hedge failed: Could not determine an execution plan. Please try again later.")
+
+        except (ValueError, IndexError) as e:
+            log.error(f"Error parsing hedge_now callback data '{data}': {e}")
+            await query.edit_message_text(text="❌ An error occurred while processing your request.")
 
     elif data == "dismiss_alert":
-        await query.edit_message_text(text="*Alert dismissed by user.*", parse_mode=ParseMode.MARKDOWN)
+        # This block handles the "Dismiss" button.
+        await query.edit_message_text(text="<i>Alert dismissed by user.</i>", parse_mode=ParseMode.HTML)

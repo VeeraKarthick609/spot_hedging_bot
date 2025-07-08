@@ -12,4 +12,6 @@ bot_activity.log
 # exclude IDE specific files
 .idea/
 
+# exclude db
+hedge_bot.db
 README.md
