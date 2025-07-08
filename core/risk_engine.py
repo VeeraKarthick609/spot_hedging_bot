@@ -5,6 +5,14 @@ import time
 import asyncio
 from py_vollib.black_scholes.greeks.analytical import delta, gamma, vega, theta
 from datetime import datetime
+import io
+import matplotlib
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import pandas as pd
+from typing import List, Dict
+# matplotlib.use('Agg') # Use non-interactive backend for matplotlib
+
 
 # Import our real data source
 from services.data_fetcher import data_fetcher_instance
@@ -252,6 +260,153 @@ class RiskEngine:
         best_venue = min(results, key=lambda x: x['total_final_cost']) if side == 'buy' else max(results, key=lambda x: x['total_final_cost'])
         log.info(f"Best execution venue found: {best_venue['venue'].upper()} with estimated average price {best_venue['avg_fill_price']:.2f}")
         return best_venue
+    
+    def generate_hedge_history_chart(self, history_data: List[Dict]) -> io.BytesIO | None:
+        """
+        Generates a professional, themed PNG chart of hedge history with enhanced styling
+        and informative elements, returns as an in-memory byte buffer for Telegram.
+        """
+        if not history_data:
+            return None
+
+        # 1. --- Data Preparation ---
+        df = pd.DataFrame(history_data)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.sort_values('timestamp')
+        
+        # Calculate cumulative position and additional metrics
+        df['net_hedge_position'] = df['size'].cumsum()
+        df['position_change'] = df['size']
+        
+        # Calculate some summary statistics
+        max_position = df['net_hedge_position'].max()
+        min_position = df['net_hedge_position'].min()
+        current_position = df['net_hedge_position'].iloc[-1]
+        total_volume = df['size'].abs().sum()
+
+        # 2. --- Enhanced Theming and Styling ---
+        plt.style.use('dark_background')
+        
+        # Create figure with custom styling
+        fig, ax = plt.subplots(figsize=(12, 8), facecolor='#0f1419')
+        ax.set_facecolor('#0f1419')
+
+        # 3. --- Enhanced Plotting ---
+        # Main line with gradient-like effect
+        line = ax.plot(
+            df['timestamp'], df['net_hedge_position'], 
+            linewidth=3, color='#00d4ff', alpha=0.9,
+            label='Net Hedge Position'
+        )[0]
+        
+        # Add markers for individual hedge actions with better visibility
+        # Positive changes (long hedges) in green, negative (short hedges) in red
+        for i, row in df.iterrows():
+            if row['position_change'] > 0:
+                color = '#00ff88'
+                marker = '^'  # Up arrow for long positions
+            else:
+                color = '#ff4444'
+                marker = 'v'  # Down arrow for short positions
+            
+            size = min(abs(row['position_change']) * 30 + 80, 200)  # Better size scaling
+            ax.scatter(row['timestamp'], row['net_hedge_position'], 
+                    c=color, s=size, alpha=0.8, marker=marker,
+                    edgecolors='white', linewidth=2, zorder=5)
+
+        # Add area fill under the line for better visual impact
+        ax.fill_between(df['timestamp'], df['net_hedge_position'], 
+                    alpha=0.2, color='#00d4ff')
+
+        # Add zero line for reference
+        ax.axhline(y=0, color='#666666', linestyle='--', alpha=0.5, linewidth=1)
+
+        # 4. --- Enhanced Labels and Title ---
+        # Multi-line title with current position
+        title_text = f'Net Hedge Position Over Time\nCurrent: {current_position:,.0f} contracts'
+        ax.set_title(title_text, color='white', fontsize=16, pad=25, 
+                    fontweight='bold', linespacing=1.2)
+        
+        ax.set_xlabel('Date & Time (UTC)', color='#cccccc', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Net Position (Contracts)', color='#cccccc', fontsize=12, fontweight='bold')
+
+        # 5. --- Advanced Grid and Styling ---
+        # Multi-level grid system
+        ax.grid(True, linestyle='-', alpha=0.1, color='white')
+        ax.grid(True, linestyle='--', alpha=0.05, color='white', which='minor')
+        
+        # Customize spines
+        for spine in ax.spines.values():
+            spine.set_edgecolor('#333333')
+            spine.set_linewidth(1.5)
+
+        # 6. --- Enhanced Date Formatting ---
+        # Better date formatting based on time range
+        time_range = df['timestamp'].max() - df['timestamp'].min()
+        if time_range.days > 7:
+            date_format = mdates.DateFormatter('%m-%d')
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+        elif time_range.days > 1:
+            date_format = mdates.DateFormatter('%m-%d\n%H:%M')
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=6))
+        else:
+            date_format = mdates.DateFormatter('%H:%M')
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+        
+        ax.xaxis.set_major_formatter(date_format)
+        
+        # Rotate and style tick labels
+        ax.tick_params(axis='x', colors='#ffffff', rotation=0, labelsize=10)
+        ax.tick_params(axis='y', colors='#ffffff', labelsize=10)
+
+        # 7. --- Add Summary Statistics Box ---
+        # Create a text box with key statistics
+        stats_text = f"""Position Summary:
+    Current: {current_position:,.0f}
+    Max: {max_position:,.0f}
+    Min: {min_position:,.0f}
+    Total Volume: {total_volume:,.0f}
+    Total Trades: {len(df):,}"""
+        
+        # Position the text box in the upper right corner
+        ax.text(0.98, 0.98, stats_text, transform=ax.transAxes, 
+                verticalalignment='top', horizontalalignment='right',
+                bbox=dict(boxstyle='round,pad=0.8', facecolor='#1a1a1a', 
+                        edgecolor='#00d4ff', alpha=0.9, linewidth=1.5),
+                fontsize=10, color='#ffffff', fontfamily='monospace')
+
+        # 8. --- Add Legend ---
+        # Create custom legend elements
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], color='#00d4ff', linewidth=3, label='Net Position'),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='#00ff88', 
+                markersize=8, label='Long Hedge', linestyle='None'),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='#ff4444', 
+                markersize=8, label='Short Hedge', linestyle='None')
+        ]
+        
+        ax.legend(handles=legend_elements, loc='upper left', 
+                facecolor='#1a1a1a', edgecolor='#00d4ff', 
+                labelcolor='#ffffff', fontsize=10, framealpha=0.9)
+
+        # 9. --- Final Touches ---
+        # Adjust layout to prevent clipping
+        plt.tight_layout()
+        
+        # Add subtle border around the entire plot
+        fig.patch.set_edgecolor('#333333')
+        fig.patch.set_linewidth(2)
+
+        # 10. --- Save with High Quality ---
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', transparent=False, dpi=150, 
+                    bbox_inches='tight', facecolor='#0f1419', 
+                    edgecolor='#333333', pad_inches=0.2)
+        buf.seek(0)
+        
+        plt.close(fig)
+        return buf
 
 # Create a single instance
 risk_engine_instance = RiskEngine()

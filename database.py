@@ -15,11 +15,9 @@ class DatabaseManager:
         return sqlite3.connect(self.db_file)
 
     def create_tables(self):
-        """Creates the necessary tables if they don't exist."""
         log.info("Initializing database and creating tables if they don't exist...")
         conn = self._get_connection()
         cursor = conn.cursor()
-        # Table to store user's monitored position settings
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS positions (
                 chat_id INTEGER PRIMARY KEY,
@@ -27,8 +25,10 @@ class DatabaseManager:
                 spot_symbol TEXT NOT NULL,
                 perp_symbol TEXT NOT NULL,
                 size REAL NOT NULL,
-                threshold REAL NOT NULL,
+                delta_threshold REAL NOT NULL,
+                var_threshold REAL, -- NEW: Can be NULL if not set
                 auto_hedge_enabled INTEGER DEFAULT 0,
+                daily_summary_enabled INTEGER DEFAULT 1, -- NEW: Enabled by default
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -51,39 +51,42 @@ class DatabaseManager:
 
     def upsert_position(self, chat_id: int, data: Dict[str, Any]):
         """
-        Inserts or updates a user's position settings.
-        This version is corrected to use the proper column name 'auto_hedge_enabled'.
+        Inserts a new position or updates it if the chat_id already exists.
+        Handles the full user configuration, including optional fields.
         """
         conn = self._get_connection()
         cursor = conn.cursor()
+
+        # Ensure all required keys have a default value before saving to the DB.
+        # This makes the function robust even if the input dict is missing fields.
+        data.setdefault('var_threshold', None)
+        data.setdefault('auto_hedge_enabled', 0)
+        data.setdefault('daily_summary_enabled', 1)
         
-        # This SQL query is now corrected. It uses ':auto_hedge_enabled' as a placeholder
-        # and 'excluded.auto_hedge_enabled' in the UPDATE clause.
+        # Use the powerful "UPSERT" syntax (INSERT ON CONFLICT)
         cursor.execute("""
-            INSERT INTO positions (chat_id, asset, spot_symbol, perp_symbol, size, threshold, auto_hedge_enabled)
-            VALUES (:chat_id, :asset, :spot_symbol, :perp_symbol, :size, :threshold, :auto_hedge_enabled)
+            INSERT INTO positions (
+                chat_id, asset, spot_symbol, perp_symbol, size, 
+                delta_threshold, var_threshold, auto_hedge_enabled, daily_summary_enabled
+            )
+            VALUES (
+                :chat_id, :asset, :spot_symbol, :perp_symbol, :size, 
+                :delta_threshold, :var_threshold, :auto_hedge_enabled, :daily_summary_enabled
+            )
             ON CONFLICT(chat_id) DO UPDATE SET
                 asset=excluded.asset,
                 spot_symbol=excluded.spot_symbol,
                 perp_symbol=excluded.perp_symbol,
                 size=excluded.size,
-                threshold=excluded.threshold,
-                auto_hedge_enabled=excluded.auto_hedge_enabled
-        """, {
-            # The dictionary keys must match the named placeholders in the SQL query.
-            "chat_id": chat_id, 
-            "asset": data['asset'], 
-            "spot_symbol": data['spot_symbol'], 
-            "perp_symbol": data['perp_symbol'],
-            "size": data['size'], 
-            "threshold": data['threshold'], 
-            # The key here now matches the SQL parameter ':auto_hedge_enabled'.
-            # We use .get() to provide a default value of 0 (off) if it's not specified.
-            "auto_hedge_enabled": data.get('auto_hedge_enabled', 0) 
-        })
+                delta_threshold=excluded.delta_threshold,
+                var_threshold=excluded.var_threshold,
+                auto_hedge_enabled=excluded.auto_hedge_enabled,
+                daily_summary_enabled=excluded.daily_summary_enabled
+        """, data)
+        
         conn.commit()
         conn.close()
-        log.info(f"Upserted position for chat_id: {chat_id}")
+        log.info(f"Upserted position for chat_id: {chat_id} with data: {data}")
 
     def get_position(self, chat_id: int) -> Dict[str, Any] | None:
         """Retrieves a user's position by chat_id."""
