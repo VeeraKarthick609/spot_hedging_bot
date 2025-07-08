@@ -60,7 +60,6 @@ class RiskEngine:
         # 3. Align data and calculate beta
         # Merge dataframes on timestamp to ensure we are comparing the same time periods
         merged_df = pd.merge(spot_df[['timestamp', 'close']], perp_df[['timestamp', 'close']], on='timestamp', suffixes=('_spot', '_perp'))
-        
         if len(merged_df) < 30: # Need enough data points for a meaningful calculation
             log.warning("Not enough overlapping historical data to calculate beta accurately.")
             return 1.0 # Default to 1.0 if data is sparse

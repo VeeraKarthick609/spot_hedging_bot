@@ -26,9 +26,15 @@ class DatabaseManager:
                 perp_symbol TEXT NOT NULL,
                 size REAL NOT NULL,
                 delta_threshold REAL NOT NULL,
-                var_threshold REAL, -- NEW: Can be NULL if not set
+                var_threshold REAL,
+                daily_summary_enabled INTEGER DEFAULT 1, -- Default to ON
                 auto_hedge_enabled INTEGER DEFAULT 0,
-                daily_summary_enabled INTEGER DEFAULT 1, -- NEW: Enabled by default
+                
+                hedge_ratio REAL DEFAULT 1.0, -- Default to 100% hedge for old behavior
+                use_regime_filter INTEGER DEFAULT 0, -- Default to OFF
+                fast_ma INTEGER DEFAULT 50,
+                slow_ma INTEGER DEFAULT 200,
+
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)

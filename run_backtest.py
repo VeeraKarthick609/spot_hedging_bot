@@ -14,9 +14,21 @@ def main():
     # --- 2. Define Strategy Configuration ---
     # This is where you can experiment with different parameters
     strategy_config = {
-        'initial_capital': 100000.0,      # Starting cash
-        'initial_spot_holding': 1.0,      # e.g., We start by buying 1 BTC
-        'delta_threshold': 500.0,         # Hedge if our exposure exceeds $500
+        'initial_capital': 100000.0,
+        'initial_spot_holding': 1.0,
+        
+        # --- NEW DYNAMIC PARAMETERS ---
+        # 'hedge_ratio': 1.0 means full hedge. 0.5 means hedge 50% of the delta.
+        'hedge_ratio': 0.6, 
+        
+        # 'delta_threshold': We still need a trigger to avoid constant, tiny trades.
+        'delta_threshold': 1000.0,
+        
+        # 'regime_filter': Use a simple moving average crossover to detect market trend.
+        # If True, only hedge when the market is in a "downtrend".
+        'use_regime_filter': True,
+        'fast_ma': 50,  # 50-hour moving average
+        'slow_ma': 200, # 200-hour moving average
     }
 
     # --- 3. Initialize and Run the Backtester ---

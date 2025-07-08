@@ -19,8 +19,8 @@ from bot.handlers import (
     hedge_status_command, hedge_history_command, chart_command, 
     adjust_threshold_start, adjust_delta_received, adjust_var_received, 
     cancel_adjustment, send_daily_summary, ADJUST_DELTA, ADJUST_VAR,
-    # Ensure reusable functions are imported if needed elsewhere, though they are primarily used inside handlers
-    send_portfolio_report, execute_hedge_logic
+    send_portfolio_report, execute_hedge_logic, 
+    generate_report_command, configure_strategy_command
 )
 from services.data_fetcher import data_fetcher_instance
 from database import db_manager
@@ -79,6 +79,8 @@ def main() -> None:
     application.add_handler(CommandHandler("chart", chart_command))
     application.add_handler(CommandHandler("portfolio_risk", portfolio_risk_command))
     application.add_handler(CommandHandler("price", price_command))
+    application.add_handler(CommandHandler("generate_report", generate_report_command))
+    application.add_handler(CommandHandler("configure_strategy", configure_strategy_command))
     
     # --- Register the General Callback Handler for non-conversation buttons ---
     application.add_handler(CallbackQueryHandler(button_callback_handler))
