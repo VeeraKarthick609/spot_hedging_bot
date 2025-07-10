@@ -1,13 +1,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-
-# Import the simulated environment components
 from .portfolio import SimulatedPortfolio
 from .execution import SimulatedExecutionHandler
-
-# Although not used for the hedging logic in this simplified backtest,
-# it's kept for structural consistency and potential future use with options.
 from core.risk_engine import RiskEngine
 
 class Backtester:
@@ -16,17 +11,9 @@ class Backtester:
     a simulated portfolio, and an execution handler.
     """
     def __init__(self, spot_data, perp_data, strategy_config):
-        """
-        Initializes the Backtester.
-        
-        :param spot_data: DataFrame with historical spot data (timestamp, close).
-        :param perp_data: DataFrame with historical perpetual data (timestamp, close).
-        :param strategy_config: A dictionary defining the strategy parameters.
-        """
         self.spot_data = spot_data
         self.perp_data = perp_data
         self.strategy = strategy_config
-        
         self.portfolio = SimulatedPortfolio(self.strategy['initial_capital'])
         self.execution_handler = SimulatedExecutionHandler()
         self.risk_engine = RiskEngine()
@@ -38,142 +25,143 @@ class Backtester:
         print(f"--- Starting INTELLIGENT HEDGING backtest ---")
         print(f"Strategy Config: {self.strategy}")
         
-        # Merge spot and perpetual data to align timestamps for each step
         data = pd.merge(self.spot_data, self.perp_data, on='timestamp', suffixes=('_spot', '_perp'))
 
-        # --- Calculate Market Regime Filter (MA Crossover) if enabled ---
         if self.strategy.get('use_regime_filter', False):
-            fast_ma_period = self.strategy['fast_ma']
-            slow_ma_period = self.strategy['slow_ma']
-            data['fast_ma'] = data['close_spot'].rolling(window=fast_ma_period).mean()
-            data['slow_ma'] = data['close_spot'].rolling(window=slow_ma_period).mean()
-            # A "bearish" regime is when the fast MA is below the slow MA
+            fast_ma = self.strategy['fast_ma']
+            slow_ma = self.strategy['slow_ma']
+            data['fast_ma'] = data['close_spot'].rolling(window=fast_ma).mean()
+            data['slow_ma'] = data['close_spot'].rolling(window=slow_ma).mean()
             data['is_bearish'] = data['fast_ma'] < data['slow_ma']
-            print(f"Regime filter enabled with {fast_ma_period}/{slow_ma_period} MA crossover.")
+            print(f"Regime filter enabled with {fast_ma}/{slow_ma} MA crossover.")
         
-        # --- Set initial portfolio holding (buy the spot asset) ---
         initial_spot_price = data.iloc[0]['close_spot']
         initial_spot_quantity = self.strategy['initial_spot_holding']
         self.portfolio.holdings['BTC_spot'] = initial_spot_quantity
         self.portfolio.cash -= initial_spot_quantity * initial_spot_price
         
-        # --- Main Backtesting Loop ---
         for i, row in data.iterrows():
-            # Skip initial period where Moving Averages are not yet calculated
             if pd.isna(row.get('slow_ma')) and self.strategy.get('use_regime_filter', False):
                 continue
 
             timestamp = row['timestamp']
             prices = {'BTC_spot': row['close_spot'], 'BTC_perp': row['close_perp']}
             
-            # 1. Update portfolio value and log performance for this timestep
             self.portfolio.update_market_value(prices)
             self.portfolio.log_performance(timestamp)
 
-            # 2. Decide if we should be actively hedging in this market condition
-            should_hedge_now = True # Default to always being able to hedge
+            # --- RE-ENGINEERED HEDGING LOGIC ---
+
+            # 1. Determine the TARGET HEDGE RATIO based on the current regime.
+            current_hedge_ratio = self.strategy['hedge_ratio'] # Default ratio
+            regime_str = "(NEUTRAL)"
             if self.strategy.get('use_regime_filter', False):
-                # If filter is on, only hedge if the market is in a bearish regime
-                should_hedge_now = row['is_bearish']
+                if row['is_bearish']:
+                    # In a bearish regime, use the configured hedge ratio.
+                    current_hedge_ratio = self.strategy['hedge_ratio']
+                    regime_str = "(BEARISH - HEDGE ON)"
+                else:
+                    # In a bullish regime, we want NO hedge to capture all upside.
+                    current_hedge_ratio = 0.0
+                    regime_str = "(BULLISH - HEDGE OFF)"
 
-            # 3. Calculate target portfolio delta based on the partial hedge ratio
+            # 2. Calculate the TARGET HEDGE VALUE in USD.
+            # This is how much of our spot position we want to be short via perps.
             spot_value = self.portfolio.holdings.get('BTC_spot', 0) * prices['BTC_spot']
-            # Target delta is the portion of the spot position we want to REMAIN exposed to.
-            # E.g., if hedge_ratio is 0.6, we want to keep 40% of our upside (target_delta = 0.4 * spot_value)
-            target_delta = spot_value * (1 - self.strategy['hedge_ratio'])
+            target_hedge_value_usd = -spot_value * current_hedge_ratio
 
-            # 4. Calculate the current actual delta of the portfolio
-            perp_value = self.portfolio.holdings.get('BTC_perp', 0) * prices['BTC_perp']
-            current_delta = spot_value + perp_value
+            # 3. Calculate the CURRENT HEDGE VALUE in USD.
+            current_hedge_value_usd = self.portfolio.holdings.get('BTC_perp', 0) * prices['BTC_perp']
             
-            # 5. Determine the amount of delta we need to correct to reach our target
-            delta_to_correct = current_delta - target_delta
+            # 4. Find the DISCREPANCY between our current hedge and our target hedge.
+            hedge_discrepancy = current_hedge_value_usd - target_hedge_value_usd
             
-            # 6. Check if a trade is needed based on the regime and thresholds
-            trade_needed = False
-            if should_hedge_now:
-                # In a "hedge-on" regime, we trade if our delta deviates too far from the target.
-                if abs(delta_to_correct) > self.strategy['delta_threshold']:
-                    trade_needed = True
-            else:
-                # In a "hedge-off" (bullish) regime, our goal is to have NO hedge.
-                # If we have any existing hedge, we must close it.
-                current_perp_holding = self.portfolio.holdings.get('BTC_perp', 0)
-                if abs(current_perp_holding) > 0.001: # Check if a hedge position exists
-                    # We want to get back to full spot delta, so we close the entire perp position.
-                    delta_to_correct = perp_value 
-                    trade_needed = True
-
-            # 7. If a trade is needed, execute it
-            if trade_needed:
-                # The quantity to trade is the opposite of the delta we need to correct
-                contracts_to_trade = -delta_to_correct / prices['BTC_perp']
+            # 5. Only trade if this discrepancy is LARGER than our delta threshold.
+            # The threshold now defines a "neutral band" around our target.
+            if abs(hedge_discrepancy) > self.strategy['delta_threshold']:
+                # The amount to trade is the opposite of the discrepancy to bring it back to the target.
+                trade_value_usd = -hedge_discrepancy
+                contracts_to_trade = trade_value_usd / prices['BTC_perp']
                 
-                if abs(contracts_to_trade) > 0.001: # Avoid dust trades
+                if abs(contracts_to_trade) > 0.001:
                     order = {'asset': 'BTC_perp', 'quantity': contracts_to_trade}
                     fill = self.execution_handler.execute_order(order, prices['BTC_perp'])
                     self.portfolio.on_fill(fill)
                     
-                    regime_str = "(BEARISH)" if should_hedge_now else "(BULLISH - CLOSING HEDGE)"
-                    print(f"{timestamp}: HEDGED {regime_str}. Current Delta: ${current_delta:,.0f}, Target Delta: ${target_delta:,.0f}. Traded {contracts_to_trade:.4f} contracts.")
+                    print(f"{timestamp}: REBALANCE {regime_str}. Discrepancy: ${hedge_discrepancy:,.0f}. Traded {contracts_to_trade:.4f} contracts.")
 
         print("--- Backtest finished ---")
         self.generate_report()
 
     def generate_report(self):
-        """Calculates and prints a detailed performance and attribution report."""
+        """
+        Calculates and prints a detailed performance report, including a benchmark 
+        comparison and a robust P&L attribution analysis.
+        """
+        if self.portfolio.history.empty:
+            print("No history recorded. Cannot generate report.")
+            return
+
         perf = self.portfolio.history.set_index('timestamp')
         
-        # --- 1. Basic Performance Metrics for Hedged Portfolio ---
+        # --- 1. Hedged Portfolio Performance Metrics ---
         total_return_hedged = (perf['total_value'].iloc[-1] / perf['total_value'].iloc[0]) - 1
-        # Annualize Sharpe Ratio based on hourly data (252 trading days * 24 hours)
-        sharpe_ratio = perf['total_value'].pct_change().mean() / perf['total_value'].pct_change().std() * np.sqrt(252*24)
-        rolling_max = perf['total_value'].cummax()
-        drawdown = perf['total_value'] / rolling_max - 1.0
-        max_drawdown_hedged = drawdown.min()
+        net_pnl_hedged = perf['total_value'].iloc[-1] - self.portfolio.initial_capital
+        
+        returns = perf['total_value'].pct_change().dropna()
+        sharpe_ratio = 0
+        if not returns.empty and returns.std() != 0:
+            sharpe_ratio = returns.mean() / returns.std() * np.sqrt(365 * 24)
+
+        rolling_max_hedged = perf['total_value'].cummax()
+        drawdown_hedged = (perf['total_value'] - rolling_max_hedged) / rolling_max_hedged
+        max_drawdown_hedged = drawdown_hedged.min()
 
         # --- 2. Unhedged "Buy and Hold" Benchmark ---
         initial_spot_price = self.spot_data['close'].iloc[0]
         spot_qty = self.strategy['initial_spot_holding']
-        initial_cost = initial_spot_price * spot_qty
-        unhedged_value = (self.portfolio.initial_capital - initial_cost) + (self.spot_data.set_index('timestamp')['close'] * spot_qty)
-        total_return_unhedged = (unhedged_value.iloc[-1] / unhedged_value.iloc[0]) - 1
-        unhedged_drawdown = (unhedged_value / unhedged_value.cummax() - 1.0).min()
+        unhedged_portfolio_value = self.portfolio.initial_capital + (self.spot_data.set_index('timestamp')['close'] - initial_spot_price) * spot_qty
+        total_return_unhedged = (unhedged_portfolio_value.iloc[-1] / unhedged_portfolio_value.iloc[0]) - 1
+        rolling_max_unhedged = unhedged_portfolio_value.cummax()
+        drawdown_unhedged = (unhedged_portfolio_value - rolling_max_unhedged) / rolling_max_unhedged
+        max_drawdown_unhedged = drawdown_unhedged.min()
 
-        # --- 3. Performance Attribution Analysis ---
-        final_portfolio_value = self.portfolio.total_value
-        net_pnl_hedged = final_portfolio_value - self.portfolio.initial_capital
+        # --- 3. Rigorous P&L Attribution Analysis ---
+        final_spot_price = self.spot_data['close'].iloc[-1]
+        pnl_from_spot = (final_spot_price - initial_spot_price) * spot_qty
+        total_costs = self.portfolio.total_commissions + self.portfolio.total_slippage
+        pnl_from_hedges = net_pnl_hedged - pnl_from_spot + total_costs
         
-        spot_pnl = (self.spot_data['close'].iloc[-1] - initial_spot_price) * spot_qty
-        hedge_pnl = self.portfolio.realized_hedge_pnl
-        # Add unrealized P&L from any open perp position at the end of the backtest
-        if 'BTC_perp' in self.portfolio.holdings:
-            unrealized_pnl = (self.perp_data.iloc[-1]['close_perp'] - self.portfolio.perp_cost_basis) * self.portfolio.holdings['BTC_perp']
-            hedge_pnl += unrealized_pnl
-            
-        total_costs = self.portfolio.total_commissions # Slippage is implicitly included in P&L
+        print("\n" + "="*75)
+        print("--- Backtest Performance Report ---".center(75))
+        print("="*75)
+        print(f"{'Metric':<25} | {'Hedged Portfolio':<20} | {'Unhedged (Buy & Hold)':<25}")
+        print("-" * 75)
+        print(f"{'Total Return':<25} | {total_return_hedged:<20.2%} | {total_return_unhedged:<25.2%}")
+        print(f"{'Max Drawdown':<25} | {max_drawdown_hedged:<20.2%} | {max_drawdown_unhedged:<25.2%}")
+        print(f"{'Sharpe Ratio (Annualized)':<25} | {sharpe_ratio:<20.2f} | {'N/A':<25}")
         
-        print("\n--- Backtest Performance Report ---")
-        print(f"{'Metric':<25} | {'Hedged':<15} | {'Unhedged (Buy & Hold)':<25}")
-        print("-" * 70)
-        print(f"{'Total Return':<25} | {total_return_hedged:<15.2%} | {total_return_unhedged:<25.2%}")
-        print(f"{'Max Drawdown':<25} | {max_drawdown_hedged:<15.2%} | {unhedged_drawdown:<25.2%}")
-        print(f"{'Sharpe Ratio (Annualized)':<25} | {sharpe_ratio:<15.2f} | {'N/A':<25}")
-        
-        print("\n--- P&L Performance Attribution ---")
-        print(f"{'P&L from Spot Position':<30}: ${spot_pnl:10,.2f}")
-        print(f"{'P&L from Hedging (Perps)':<30}: ${hedge_pnl:10,.2f}")
-        print(f"{'Total Trading Costs (Fees)':<30}: ${-total_costs:10,.2f}")
-        print("-" * 43)
-        print(f"{'Net P&L (Hedged Portfolio)':<30}: ${net_pnl_hedged:10,.2f}")
+        print("\n--- P&L Attribution Analysis ---")
+        print("-" * 55)
+        print(f"{'P&L from Spot Position (Buy & Hold)':<35}: ${pnl_from_spot:12,.2f}")
+        print(f"{'P&L from Hedging Activities':<35}: ${pnl_from_hedges:12,.2f}")
+        print(f"{'Total Costs (Fees + Slippage)':<35}: ${-total_costs:12,.2f}")
+        print("-" * 55)
+        print(f"{'Net P&L (Sum of Above)':<35}: ${pnl_from_spot + pnl_from_hedges - total_costs:12,.2f}")
+        print(f"{'Actual Net P&L (Checksum)':<35}: ${net_pnl_hedged:12,.2f}")
+        print("="*75)
 
         # --- 4. Plotting Results ---
-        plt.style.use('seaborn-v0_8-whitegrid')
-        plt.figure(figsize=(15, 8))
-        plt.plot(perf.index, perf['total_value'], label='Hedged Portfolio (Intelligent)', color='royalblue', linewidth=2)
-        plt.plot(unhedged_value.index, unhedged_value.values, label='Unhedged (Buy & Hold)', color='darkorange', linestyle='--', alpha=0.9)
-        plt.title('Hedged vs. Unhedged Portfolio Performance (Intelligent Strategy)', fontsize=16)
-        plt.xlabel('Date', fontsize=12)
-        plt.ylabel('Portfolio Value (USD)', fontsize=12)
-        plt.legend(fontsize=12)
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(15, 8), facecolor='#1c1c1e')
+        ax.set_facecolor('#1c1c1e')
+        ax.plot(perf.index, perf['total_value'], label='Hedged Portfolio (Intelligent)', color='#00aaff', linewidth=2)
+        ax.plot(unhedged_portfolio_value.index, unhedged_portfolio_value.values, label=f"Unhedged ({spot_qty} BTC)", color='#ffae00', linestyle='--', alpha=0.9)
+        ax.set_title('Hedged vs. Unhedged Portfolio Performance (Intelligent Strategy)', color='white', fontsize=18)
+        ax.set_xlabel('Date', color='white', fontsize=12)
+        ax.set_ylabel('Portfolio Value (USD)', color='white', fontsize=12)
+        legend = ax.legend(fontsize=12)
+        plt.setp(legend.get_texts(), color='white')
+        ax.grid(True, linestyle='--', alpha=0.2, color='gray')
+        fig.tight_layout()
         plt.show()

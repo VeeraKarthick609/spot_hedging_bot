@@ -122,39 +122,46 @@ class RiskEngine:
         
     async def calculate_portfolio_risk(self, portfolio: list, prices: dict) -> dict:
         """
-        Calculates aggregated risk metrics for an entire portfolio.
-        
-        :param portfolio: A list of position dicts, e.g., 
-                          [{'type': 'spot', 'asset': 'BTC', 'size': 1.5}, 
-                           {'type': 'option', 'symbol': 'BTC-29NOV24-70000-P', 'size': -2}]
-        :param prices: A dict of current prices, e.g., {'BTC/USDT': 60000}
-        :return: A dict with aggregated greeks.
+        Calculates a WIDE RANGE of aggregated risk metrics for an entire portfolio.
         """
-        total_delta_usd = 0
-        # In a full implementation, you would aggregate all greeks
+        # Initialize aggregators
+        total_delta_usd = 0.0
+        total_gamma_usd = 0.0  # Gamma is measured in delta change per $1 move in underlying
+        total_vega_usd = 0.0   # Vega is measured in USD value change per 1% move in IV
+        total_theta_usd = 0.0  # Theta is measured in USD value decay per day
         
-        for position in portfolio:
-            if position['type'] == 'spot':
-                price = prices.get(f"{position['asset']}/USDT")
-                if price:
-                    total_delta_usd += position['size'] * price
-            
-            elif position['type'] == 'perp':
-                # Assuming linear perps for simplicity
-                price = prices.get(f"{position['asset']}/USDT:USDT") # Bybit symbol format
-                if price:
-                    total_delta_usd += position['size'] * price
+        btc_price = prices.get('BTC/USDT', 0)
+        if btc_price == 0: return {}
 
-            elif position['type'] == 'option':
-                btc_price = prices.get('BTC/USDT')
+        for position in portfolio:
+            pos_type = position['type']
+            size = position.get('size', 0)
+            asset = position.get('asset', '')
+
+            if pos_type == 'spot':
+                total_delta_usd += size * btc_price
+            
+            elif pos_type == 'perp':
+                total_delta_usd += size * btc_price # Assuming 1x beta for simplicity in this report
+
+            elif pos_type == 'option':
                 option_ticker = await data_fetcher_instance.fetch_option_ticker(position['symbol'])
-                if btc_price and option_ticker:
+                if option_ticker:
                     greeks = self.calculate_option_greeks(btc_price, option_ticker)
                     if greeks:
-                        # Delta of one option contract * number of contracts * price of underlying
-                        total_delta_usd += greeks['delta'] * position['size'] * btc_price
+                        # Convert Greek units to portfolio-level USD values
+                        total_delta_usd += size * greeks['delta'] * btc_price
+                        # Gamma Value: 0.5 * Gamma * (S * 1%)^2. We simplify to show exposure.
+                        total_gamma_usd += size * greeks['gamma'] * btc_price 
+                        total_vega_usd += size * greeks['vega'] # Vega is already in $/1% change
+                        total_theta_usd += size * greeks['theta'] # Theta is already in $/day
         
-        return {"total_delta_usd": total_delta_usd}
+        return {
+            "total_delta_usd": total_delta_usd,
+            "total_gamma_usd": total_gamma_usd,
+            "total_vega_usd": total_vega_usd,
+            "total_theta_usd": total_theta_usd,
+        }
     
     async def calculate_historical_var(self, portfolio: list, prices: dict, days: int = 90, confidence_level: float = 0.95) -> float | None:
         """
@@ -260,6 +267,37 @@ class RiskEngine:
         log.info(f"Best execution venue found: {best_venue['venue'].upper()} with estimated average price {best_venue['avg_fill_price']:.2f}")
         return best_venue
     
+    async def run_stress_test(self, portfolio: list, prices: dict, scenario: dict) -> dict:
+        """Calculates the P&L of a portfolio under a given market shock scenario."""
+        # 1. Calculate the portfolio's current value
+        initial_value = 0
+        # A full implementation would require a dedicated `calculate_portfolio_value` function.
+        # For simplicity, we'll use the delta as a proxy for value.
+        risk_data = await self.calculate_portfolio_risk(portfolio, prices)
+        initial_value = risk_data['total_delta_usd'] # Simplified approximation
+
+        # 2. Define the stressed market conditions
+        stressed_prices = prices.copy()
+        stressed_prices['BTC/USDT'] *= (1 + scenario.get('price_change_pct', 0))
+        
+        # 3. Calculate the portfolio's value under stress
+        # This is a simplified calculation. A full version would re-price every option.
+        # New Delta = Old Delta + Gamma * dS + ...
+        # For a quick estimate, we can use the greeks.
+        dS = stressed_prices['BTC/USDT'] - prices['BTC/USDT']
+        
+        # P&L from Delta and Gamma are the main drivers of a stress test
+        pnl_from_delta = risk_data['total_delta_usd'] * scenario.get('price_change_pct', 0)
+        pnl_from_gamma = 0.5 * risk_data['total_gamma_usd'] * dS * scenario.get('price_change_pct', 0)
+        
+        stressed_pnl = pnl_from_delta + pnl_from_gamma
+
+        return {
+            "initial_value": initial_value,
+            "stressed_pnl": stressed_pnl,
+            "scenario_name": scenario['name']
+        }
+    
     def generate_hedge_history_chart(self, history_data: List[Dict]) -> io.BytesIO | None:
         """
         Generates a professional, themed PNG chart of hedge history with enhanced styling
@@ -361,11 +399,11 @@ class RiskEngine:
         # 7. --- Add Summary Statistics Box ---
         # Create a text box with key statistics
         stats_text = f"""Position Summary:
-    Current: {current_position:,.0f}
-    Max: {max_position:,.0f}
-    Min: {min_position:,.0f}
-    Total Volume: {total_volume:,.0f}
-    Total Trades: {len(df):,}"""
+            Current: {current_position:,.0f}
+            Max: {max_position:,.0f}
+            Min: {min_position:,.0f}
+            Total Volume: {total_volume:,.0f}
+            Total Trades: {len(df):,}"""
         
         # Position the text box in the upper right corner
         ax.text(0.98, 0.98, stats_text, transform=ax.transAxes, 

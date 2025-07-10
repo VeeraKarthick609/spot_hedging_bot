@@ -19,25 +19,24 @@ class DatabaseManager:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS positions (
-                chat_id INTEGER PRIMARY KEY,
-                asset TEXT NOT NULL,
-                spot_symbol TEXT NOT NULL,
-                perp_symbol TEXT NOT NULL,
-                size REAL NOT NULL,
-                delta_threshold REAL NOT NULL,
-                var_threshold REAL,
-                daily_summary_enabled INTEGER DEFAULT 1, -- Default to ON
-                auto_hedge_enabled INTEGER DEFAULT 0,
-                
-                hedge_ratio REAL DEFAULT 1.0, -- Default to 100% hedge for old behavior
-                use_regime_filter INTEGER DEFAULT 0, -- Default to OFF
-                fast_ma INTEGER DEFAULT 50,
-                slow_ma INTEGER DEFAULT 200,
-
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        CREATE TABLE IF NOT EXISTS positions (
+            chat_id INTEGER PRIMARY KEY,
+            asset TEXT NOT NULL,
+            spot_symbol TEXT NOT NULL,
+            perp_symbol TEXT NOT NULL,
+            size REAL NOT NULL,
+            delta_threshold REAL NOT NULL,
+            var_threshold REAL,
+            auto_hedge_enabled INTEGER DEFAULT 0,
+            daily_summary_enabled INTEGER DEFAULT 1,
+            large_trade_threshold REAL,
+            slow_ma INTEGER DEFAULT 20,
+            fast_ma INTEGER DEFAULT 10,
+            use_regime_filter INTEGER DEFAULT 0,
+            hedge_ratio REAL DEFAULT 1.0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
         # Table to store the history of all hedging actions
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS hedge_history (
@@ -51,33 +50,49 @@ class DatabaseManager:
                 FOREIGN KEY (chat_id) REFERENCES positions (chat_id)
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio_holdings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                asset_symbol TEXT NOT NULL, -- e.g., 'BTC/USDT', 'BTC-PERP', 'BTC-29NOV24-70000-P'
+                asset_type TEXT NOT NULL, -- 'spot', 'perp', 'option'
+                quantity REAL NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, asset_symbol) -- A user can only have one entry per symbol
+            )
+        """)
         conn.commit()
         conn.close()
         log.info("Database initialized successfully.")
 
     def upsert_position(self, chat_id: int, data: Dict[str, Any]):
-        """
-        Inserts a new position or updates it if the chat_id already exists.
-        Handles the full user configuration, including optional fields.
-        """
+        """Inserts a new position or updates it if the chat_id already exists."""
         conn = self._get_connection()
         cursor = conn.cursor()
-
-        # Ensure all required keys have a default value before saving to the DB.
-        # This makes the function robust even if the input dict is missing fields.
+    
+        # Set defaults for optional fields
         data.setdefault('var_threshold', None)
         data.setdefault('auto_hedge_enabled', 0)
         data.setdefault('daily_summary_enabled', 1)
+        data.setdefault('large_trade_threshold', None)
+        data.setdefault('slow_ma', 20)
+        data.setdefault('fast_ma', 10)
+        data.setdefault('use_regime_filter', 0)
+        data.setdefault('hedge_ratio', 1.0)  # Default to full hedge
         
-        # Use the powerful "UPSERT" syntax (INSERT ON CONFLICT)
         cursor.execute("""
             INSERT INTO positions (
                 chat_id, asset, spot_symbol, perp_symbol, size, 
-                delta_threshold, var_threshold, auto_hedge_enabled, daily_summary_enabled
+                delta_threshold, var_threshold, auto_hedge_enabled, 
+                daily_summary_enabled, large_trade_threshold,
+                slow_ma, fast_ma, use_regime_filter, hedge_ratio
             )
             VALUES (
                 :chat_id, :asset, :spot_symbol, :perp_symbol, :size, 
-                :delta_threshold, :var_threshold, :auto_hedge_enabled, :daily_summary_enabled
+                :delta_threshold, :var_threshold, :auto_hedge_enabled, 
+                :daily_summary_enabled, :large_trade_threshold,
+                :slow_ma, :fast_ma, :use_regime_filter, :hedge_ratio
             )
             ON CONFLICT(chat_id) DO UPDATE SET
                 asset=excluded.asset,
@@ -87,12 +102,16 @@ class DatabaseManager:
                 delta_threshold=excluded.delta_threshold,
                 var_threshold=excluded.var_threshold,
                 auto_hedge_enabled=excluded.auto_hedge_enabled,
-                daily_summary_enabled=excluded.daily_summary_enabled
+                daily_summary_enabled=excluded.daily_summary_enabled,
+                large_trade_threshold=excluded.large_trade_threshold,
+                slow_ma=excluded.slow_ma,
+                fast_ma=excluded.fast_ma,
+                use_regime_filter=excluded.use_regime_filter,
+                hedge_ratio=excluded.hedge_ratio
         """, data)
-        
         conn.commit()
         conn.close()
-        log.info(f"Upserted position for chat_id: {chat_id} with data: {data}")
+        log.info(f"Upserted position for chat_id: {chat_id}")
 
     def get_position(self, chat_id: int) -> Dict[str, Any] | None:
         """Retrieves a user's position by chat_id."""
@@ -144,6 +163,52 @@ class DatabaseManager:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+    
+    def upsert_holding(self, chat_id: int, symbol: str, asset_type: str, quantity_change: float):
+        """Adds or subtracts from a holding's quantity. Inserts if new, deletes if quantity is zero."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        # First, get current quantity
+        cursor.execute("SELECT quantity FROM portfolio_holdings WHERE chat_id = ? AND asset_symbol = ?", (chat_id, symbol))
+        result = cursor.fetchone()
+        current_quantity = result[0] if result else 0.0
+        
+        new_quantity = current_quantity + quantity_change
+        
+        if abs(new_quantity) < 1e-9: # Effectively zero, so we remove it
+            cursor.execute("DELETE FROM portfolio_holdings WHERE chat_id = ? AND asset_symbol = ?", (chat_id, symbol))
+            log.info(f"Removed holding for {chat_id} on {symbol} as quantity is zero.")
+        else:
+            cursor.execute("""
+                INSERT INTO portfolio_holdings (chat_id, asset_symbol, asset_type, quantity)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id, asset_symbol) DO UPDATE SET
+                    quantity = ?,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (chat_id, symbol, asset_type, new_quantity, new_quantity))
+            log.info(f"Upserted holding for {chat_id}: {symbol} new quantity {new_quantity:.4f}")
+        
+        conn.commit()
+        conn.close()
+
+    def get_holdings(self, chat_id: int) -> List[Dict[str, Any]]:
+        """Retrieves all current holdings for a user."""
+        conn = self._get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM portfolio_holdings WHERE chat_id = ?", (chat_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def clear_holdings(self, chat_id: int):
+        """Deletes all holdings for a user. Used when monitoring stops."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM portfolio_holdings WHERE chat_id = ?", (chat_id,))
+        conn.commit()
+        conn.close()
+        log.info(f"Cleared all holdings for chat_id: {chat_id}")
 
 # Create a single instance to be used across the application
 db_manager = DatabaseManager(DB_FILE)

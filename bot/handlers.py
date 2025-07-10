@@ -13,6 +13,7 @@ from services.data_fetcher import data_fetcher_instance
 from core.risk_engine import risk_engine_instance
 from database import db_manager
 from utils.pdf_generator import create_report_pdf
+import pandas as pd
 
 
 log = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ user_positions = {}
 # --- Options Hedging Conversation States ---
 SELECT_STRATEGY, SELECT_EXPIRY, SELECT_STRIKE, CONFIRM_HEDGE = range(4)
 ADJUST_DELTA, ADJUST_VAR = range(10, 12) # Use higher numbers to avoid conflict
+SELECT_PUT_STRIKE, SELECT_CALL_STRIKE = range(20, 22)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends an updated welcome message with all commands."""
@@ -51,8 +53,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await start_command(update, context)
 
 async def stop_monitoring_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db_manager.delete_position(update.effective_chat.id)
-    await update.message.reply_text("✅ All monitoring has been stopped and settings cleared.")
+    chat_id = update.effective_chat.id
+    db_manager.delete_position(chat_id)
+    db_manager.clear_holdings(chat_id) # Also clear the holdings state
+    await update.message.reply_text("✅ All monitoring and portfolio state has been stopped and cleared.")
 
 async def auto_hedge_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
@@ -123,6 +127,12 @@ async def execute_hedge_logic(context: ContextTypes.DEFAULT_TYPE, chat_id: int, 
         size=size,
         details=json.dumps(execution_plan)
     )
+    db_manager.upsert_holding(
+        chat_id=chat_id,
+        symbol=perp_symbol, # Using Bybit's symbol format as the key
+        asset_type='perp',
+        quantity_change=size
+    )
     return execution_plan
 
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -145,16 +155,16 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def hedge_options_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the options hedging conversation."""
     chat_id = update.effective_chat.id
-    if chat_id not in user_positions:
+    position = db_manager.get_position(chat_id)
+    if not position:
         await update.message.reply_text("❌ Please set up a position to monitor first using `/monitor_risk`.")
         return ConversationHandler.END
-
-    position = user_positions[chat_id]
     
     # For a long spot position, the logical hedges are buying a put or selling a call.
     keyboard = [
         [InlineKeyboardButton("Buy Protective Put (Downside Protection)", callback_data="strategy_put")],
         [InlineKeyboardButton("Sell Covered Call (Generate Income)", callback_data="strategy_call")],
+        [InlineKeyboardButton("Create Collar (Put+Call)", callback_data="strategy_collar")],
         [InlineKeyboardButton("Cancel", callback_data="cancel")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -173,26 +183,29 @@ async def select_strategy(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     
     context.user_data['strategy'] = query.data # e.g., 'strategy_put'
+    if context.user_data['strategy'] == 'strategy_collar':
+        await query.edit_message_text("A collar protects your downside while capping your upside.\nFirst, let's choose the **Protective Put**.")
     
-    await query.edit_message_text("Fetching available expiry dates from Deribit...")
-    
-    # Fetch all BTC options and extract unique expiry dates
-    instruments = await data_fetcher_instance.fetch_option_instruments('BTC')
-    if not instruments:
-        await query.edit_message_text("❌ Could not fetch options data from Deribit. Please try again later.")
-        return ConversationHandler.END
+    else:
+        await query.edit_message_text("Fetching available expiry dates from Deribit...")
+        
+        # Fetch all BTC options and extract unique expiry dates
+        instruments = await data_fetcher_instance.fetch_option_instruments('BTC')
+        if not instruments:
+            await query.edit_message_text("❌ Could not fetch options data from Deribit. Please try again later.")
+            return ConversationHandler.END
 
-    expiries = sorted(list(set([i.split('-')[1] for i in instruments])))
-    
-    keyboard = []
-    for expiry in expiries[:10]: # Limit to first 10 expiries for a clean interface
-        # Convert '29NOV24' to a more readable format
-        date_obj = datetime.strptime(expiry, '%y%m%d')
-        readable_date = date_obj.strftime('%d %b %Y')
-        keyboard.append([InlineKeyboardButton(readable_date, callback_data=f"expiry_{expiry}")])
-    keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+        expiries = sorted(list(set([i.split('-')[1] for i in instruments])))
+        
+        keyboard = []
+        for expiry in expiries[:10]: # Limit to first 10 expiries for a clean interface
+            # Convert '29NOV24' to a more readable format
+            date_obj = datetime.strptime(expiry, '%y%m%d')
+            readable_date = date_obj.strftime('%d %b %Y')
+            keyboard.append([InlineKeyboardButton(readable_date, callback_data=f"expiry_{expiry}")])
+        keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
 
-    await query.edit_message_text("Please select an expiry date:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text("Please select an expiry date:", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_EXPIRY
 
 async def select_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -202,108 +215,177 @@ async def select_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     expiry = query.data.split('_')[1]
     context.user_data['expiry'] = expiry
+    if context.user_data['strategy'] == 'strategy_collar':
+        # For a collar, the next step is selecting the PUT strike
+        await query.edit_message_text(f"Please select a **Put Strike Price**:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        return SELECT_PUT_STRIKE
+    else:
     
-    await query.edit_message_text("Fetching available strike prices...")
-    
-    # Get current BTC price to suggest relevant strikes
-    btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
-    if not btc_price:
-        await query.edit_message_text("❌ Could not fetch BTC price. Please try again.")
-        return ConversationHandler.END
+        await query.edit_message_text("Fetching available strike prices...")
+        
+        # Get current BTC price to suggest relevant strikes
+        btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+        if not btc_price:
+            await query.edit_message_text("❌ Could not fetch BTC price. Please try again.")
+            return ConversationHandler.END
 
-    # Get all instruments and filter for the chosen expiry and option type
-    option_type = 'P' if context.user_data['strategy'] == 'strategy_put' else 'C'
-    instruments = await data_fetcher_instance.fetch_option_instruments('BTC')
-    
-    relevant_strikes = []
-    for i in instruments:
-        parts = i.split('-')
-        if parts[1] == expiry and parts[3] == option_type:
-            relevant_strikes.append(int(parts[2]))
-    
-    # Find strikes closest to the current price (ATM, and a few OTM/ITM)
-    strikes = sorted(relevant_strikes)
-    closest_strike = min(strikes, key=lambda x:abs(x-btc_price))
-    closest_index = strikes.index(closest_strike)
-    
-    # Show 2 strikes below, the ATM strike, and 2 strikes above
-    display_strikes = strikes[max(0, closest_index-2):closest_index+3]
-    
-    keyboard = [[InlineKeyboardButton(f"Strike: ${s:,.0f}", callback_data=f"strike_{s}")] for s in display_strikes]
-    keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+        # Get all instruments and filter for the chosen expiry and option type
+        option_type = 'P' if context.user_data['strategy'] == 'strategy_put' else 'C'
+        instruments = await data_fetcher_instance.fetch_option_instruments('BTC')
+        
+        relevant_strikes = []
+        for i in instruments:
+            parts = i.split('-')
+            if parts[1] == expiry and parts[3] == option_type:
+                relevant_strikes.append(int(parts[2]))
+        
+        # Find strikes closest to the current price (ATM, and a few OTM/ITM)
+        strikes = sorted(relevant_strikes)
+        closest_strike = min(strikes, key=lambda x:abs(x-btc_price))
+        closest_index = strikes.index(closest_strike)
+        
+        # Show 2 strikes below, the ATM strike, and 2 strikes above
+        display_strikes = strikes[max(0, closest_index-2):closest_index+3]
+        
+        keyboard = [[InlineKeyboardButton(f"Strike: ${s:,.0f}", callback_data=f"strike_{s}")] for s in display_strikes]
+        keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
 
-    await query.edit_message_text(f"Current BTC Price: `${btc_price:,.2f}`\nPlease select a strike price:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-    return SELECT_STRIKE
-
-from datetime import datetime
+        await query.edit_message_text(f"Current BTC Price: `${btc_price:,.2f}`\nPlease select a strike price:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        return SELECT_STRIKE
 
 async def select_strike(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles strike choice and shows final confirmation."""
     query = update.callback_query
     await query.answer()
     
-    strike = int(query.data.split('_')[1])
-    context.user_data['strike'] = strike
-    
-    await query.edit_message_text("Calculating hedge details...")
-    
-    # Construct the Deribit instrument name
-    asset = user_positions[query.message.chat.id]['asset']
-    
-    # Parse and format expiry from YYMMDD to DMMMMYY (e.g., 250708 -> 8JUL25)
-    raw_expiry = context.user_data['expiry']  # assume in YYMMDD format like 250708
-
-    # Parse as YYMMDD format
-    expiry_date = datetime.strptime(raw_expiry, "%y%m%d")
-
-    day = str(expiry_date.day)  # e.g., 8 (no leading zero)
-    month = expiry_date.strftime("%b").upper()  # e.g., 'JUL'
-    year = expiry_date.strftime("%y")  # e.g., '25'
-
-    formatted_expiry = f"{day}{month}{year}"  
-    
-    # Construct the instrument name    
-    option_type = 'P' if context.user_data['strategy'] == 'strategy_put' else 'C'
-    instrument_name = f"{asset}-{formatted_expiry}-{strike}-{option_type}"
-    
-    # Fetch all data needed for calculation
-    btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
-    option_ticker = await data_fetcher_instance.fetch_option_ticker(instrument_name)
-    
-    if not btc_price or not option_ticker:
-        await query.edit_message_text("❌ Error fetching live data. Cannot proceed.")
-        return ConversationHandler.END
+    if context.user_data['strategy'] == 'strategy_collar':
+        # This is the second leg of the collar
+        context.user_data['call_strike'] = int(query.data.split('_')[1])
+        await query.edit_message_text("Calculating collar details...")
         
-    greeks = risk_engine_instance.calculate_option_greeks(btc_price, option_ticker)
-    if not greeks:
-        await query.edit_message_text("❌ Error calculating option greeks. Cannot proceed.")
-        return ConversationHandler.END
+        # Get data for both options (put and call)
+        asset = user_positions[query.message.chat.id]['asset']
+        raw_expiry = context.user_data['expiry']
+        
+        # Parse and format expiry
+        expiry_date = datetime.strptime(raw_expiry, "%y%m%d")
+        day = str(expiry_date.day)
+        month = expiry_date.strftime("%b").upper()
+        year = expiry_date.strftime("%y")
+        formatted_expiry = f"{day}{month}{year}"
+        
+        # Construct instrument names for both legs
+        put_instrument = f"{asset}-{formatted_expiry}-{context.user_data['strike']}-P"
+        call_instrument = f"{asset}-{formatted_expiry}-{context.user_data['call_strike']}-C"
+        
+        # Fetch market data
+        btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+        put_ticker = await data_fetcher_instance.fetch_option_ticker(put_instrument)
+        call_ticker = await data_fetcher_instance.fetch_option_ticker(call_instrument)
+        
+        if not all([btc_price, put_ticker, call_ticker]):
+            await query.edit_message_text("❌ Error fetching live data. Cannot proceed.")
+            return ConversationHandler.END
+        
+        # Calculate greeks for both options
+        put_greeks = risk_engine_instance.calculate_option_greeks(btc_price, put_ticker)
+        call_greeks = risk_engine_instance.calculate_option_greeks(btc_price, call_ticker)
+        
+        if not all([put_greeks, call_greeks]):
+            await query.edit_message_text("❌ Error calculating option greeks. Cannot proceed.")
+            return ConversationHandler.END
+        
+        # Calculate position sizes and costs
+        position_size = user_positions[query.message.chat.id]['size']
+        put_contracts = abs(position_size / put_greeks['delta'])
+        call_contracts = abs(position_size / call_greeks['delta'])
+        
+        total_cost = (put_contracts * put_greeks['price']) - (call_contracts * call_greeks['price'])
+        
+        # Calculate net delta
+        original_delta = position_size
+        put_delta = put_contracts * put_greeks['delta']
+        call_delta = call_contracts * call_greeks['delta']
+        net_delta = original_delta + put_delta + call_delta
+        
+        message = (
+            f"✅ **Collar Strategy Confirmation**\n\n"
+            f"**Put Leg:** `Buy {put_instrument}`\n"
+            f"**Put Quantity:** `{put_contracts:.2f}` contracts\n"
+            f"**Call Leg:** `Sell {call_instrument}`\n"
+            f"**Call Quantity:** `{call_contracts:.2f}` contracts\n"
+            f"**Net Cost/Premium:** `${total_cost:,.2f}`\n\n"
+            f"--- **Risk Analysis** ---\n"
+            f"**Put Delta:** `{put_greeks['delta']:.4f}`\n"
+            f"**Call Delta:** `{call_greeks['delta']:.4f}`\n"
+            f"**Original Portfolio Delta:** `{original_delta:.2f} BTC`\n"
+            f"**Net Hedge Delta:** `{put_delta + call_delta:.2f} BTC`\n"
+            f"**Final Portfolio Delta:** `{net_delta:.4f} BTC`\n\n"
+            f"This collar strategy will provide downside protection while capping upside potential."
+        )
+    else:
+        strike = int(query.data.split('_')[1])
+        context.user_data['strike'] = strike
+        
+        await query.edit_message_text("Calculating hedge details...")
+        
+        # Construct the Deribit instrument name
+        asset = user_positions[query.message.chat.id]['asset']
+        
+        # Parse and format expiry from YYMMDD to DMMMMYY (e.g., 250708 -> 8JUL25)
+        raw_expiry = context.user_data['expiry']  # assume in YYMMDD format like 250708
 
-    # Calculate how many contracts are needed to neutralize delta
-    position_size = user_positions[query.message.chat.id]['size']
-    contracts_needed = abs(position_size / greeks['delta'])
-    total_cost = contracts_needed * greeks['price']
+        # Parse as YYMMDD format
+        expiry_date = datetime.strptime(raw_expiry, "%y%m%d")
 
-    # Prepare confirmation message
-    action = "Buy" if option_type == 'P' else "Sell"
+        day = str(expiry_date.day)  # e.g., 8 (no leading zero)
+        month = expiry_date.strftime("%b").upper()  # e.g., 'JUL'
+        year = expiry_date.strftime("%y")  # e.g., '25'
+
+        formatted_expiry = f"{day}{month}{year}"  
+        
+        # Construct the instrument name    
+        option_type = 'P' if context.user_data['strategy'] == 'strategy_put' else 'C'
+        instrument_name = f"{asset}-{formatted_expiry}-{strike}-{option_type}"
+        
+        # Fetch all data needed for calculation
+        btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+        option_ticker = await data_fetcher_instance.fetch_option_ticker(instrument_name)
+        
+        if not btc_price or not option_ticker:
+            await query.edit_message_text("❌ Error fetching live data. Cannot proceed.")
+            return ConversationHandler.END
+            
+        greeks = risk_engine_instance.calculate_option_greeks(btc_price, option_ticker)
+        if not greeks:
+            await query.edit_message_text("❌ Error calculating option greeks. Cannot proceed.")
+            return ConversationHandler.END
     
-    # Portfolio delta after hedging
-    original_delta = position_size
-    hedge_delta = contracts_needed * greeks['delta']
-    new_portfolio_delta = original_delta + hedge_delta
+        # Calculate how many contracts are needed to neutralize delta
+        position_size = user_positions[query.message.chat.id]['size']
+        contracts_needed = abs(position_size / greeks['delta'])
+        total_cost = contracts_needed * greeks['price']
     
-    message = (
-        f"✅ **Hedge Confirmation**\n\n"
-        f"**Strategy:** `{action} {instrument_name}`\n"
-        f"**Quantity:** `{contracts_needed:.2f}` contracts\n"
-        f"**Est. Cost/Premium:** `${total_cost:,.2f}`\n\n"
-        f"--- **Risk Analysis** ---\n"
-        f"**Option Delta:** `{greeks['delta']:.4f}`\n"
-        f"**Original Portfolio Delta:** `{original_delta:.2f} BTC`\n"
-        f"**Hedge Delta:** `{hedge_delta:.2f} BTC`\n"
-        f"**New Portfolio Delta:** `{new_portfolio_delta:.4f} BTC`\n\n"
-        f"This action will make your position nearly delta-neutral."
-    )
+        # Prepare confirmation message
+        action = "Buy" if option_type == 'P' else "Sell"
+        
+        # Portfolio delta after hedging
+        original_delta = position_size
+        hedge_delta = contracts_needed * greeks['delta']
+        new_portfolio_delta = original_delta + hedge_delta
+        
+        message = (
+            f"✅ **Hedge Confirmation**\n\n"
+            f"**Strategy:** `{action} {instrument_name}`\n"
+            f"**Quantity:** `{contracts_needed:.2f}` contracts\n"
+            f"**Est. Cost/Premium:** `${total_cost:,.2f}`\n\n"
+            f"--- **Risk Analysis** ---\n"
+            f"**Option Delta:** `{greeks['delta']:.4f}`\n"
+            f"**Original Portfolio Delta:** `{original_delta:.2f} BTC`\n"
+            f"**Hedge Delta:** `{hedge_delta:.2f} BTC`\n"
+            f"**New Portfolio Delta:** `{new_portfolio_delta:.4f} BTC`\n\n"
+            f"This action will make your position nearly delta-neutral."
+        )
     
     keyboard = [
         [InlineKeyboardButton("Confirm (Simulated)", callback_data="confirm_hedge")],
@@ -369,130 +451,95 @@ async def portfolio_risk_command(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(report_text, parse_mode=ParseMode.MARKDOWN)
 
 # --- BACKGROUND JOB ---
+# This is an async function in bot/handlers.py
+
 async def risk_check_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    The main background job, running the intelligent hedging logic for all users.
-    This function now mirrors the logic of the successful backtester.
+    The main background job, now using a state-aware portfolio delta calculation.
+    It loops through all user configurations and their corresponding portfolio holdings
+    to make intelligent, incremental hedging decisions.
     """
-    # 1. Get all active user configurations from the database
-    all_positions = db_manager.get_all_positions()
-    if not all_positions:
-        return  # Exit early if no one is being monitored
+    all_configs = db_manager.get_all_positions()
+    if not all_configs:
+        return  # No work to do if no users are monitoring.
 
-    log.info(f"Running intelligent risk check for {len(all_positions)} users.")
+    # Fetch primary asset prices once to be efficient
+    btc_spot_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+    btc_perp_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT:USDT')
 
-    for position in all_positions:
-        try:
-            # --- 2. GATHER LIVE & HISTORICAL DATA ASYNCHRONOUSLY ---
-            chat_id = position['chat_id']
-            spot_symbol = position['spot_symbol']
-            perp_symbol = position['perp_symbol']
+    if not btc_spot_price or not btc_perp_price:
+        log.error("Could not fetch primary BTC prices. Skipping this risk check cycle.")
+        return
+
+    for config in all_configs:
+        chat_id = config['chat_id']
+        
+        # --- 1. Get current state of the entire portfolio from the database ---
+        holdings = db_manager.get_holdings(chat_id)
+        if not holdings:
+            log.warning(f"No holdings found for configured user {chat_id}. Skipping.")
+            continue
+
+        # --- 2. Calculate NET portfolio delta ---
+        net_portfolio_delta_usd = 0.0
+        for holding in holdings:
+            if holding['asset_type'] == 'spot':
+                # For now, we assume all spot is BTC. A future enhancement could fetch prices for other assets.
+                net_portfolio_delta_usd += holding['quantity'] * btc_spot_price
+            elif holding['asset_type'] == 'perp':
+                net_portfolio_delta_usd += holding['quantity'] * btc_perp_price
+            elif holding['asset_type'] == 'option':
+                # This requires fetching option ticker and greeks.
+                # A more advanced version would add this logic here.
+                # For now, this part is skipped.
+                pass
+        
+        log.info(f"Calculated Net Portfolio Delta for {chat_id}: ${net_portfolio_delta_usd:,.2f}")
+
+        # --- 3. Check if the NET delta exceeds the user's threshold ---
+        if abs(net_portfolio_delta_usd) > config['delta_threshold']:
+            log.info(f"NET DELTA THRESHOLD BREACHED for {chat_id}. Required hedge.")
             
-            log.info(f"Processing position for chat_id: {chat_id}")
+            # --- 4. Calculate the required hedge for the REMAINING delta ---
+            beta = 1.0  # Assuming 1:1 hedge ratio for BTC spot/perp
+            hedge_details = risk_engine_instance.calculate_perp_hedge(
+                spot_position_usd=net_portfolio_delta_usd,
+                perp_price=btc_perp_price,
+                beta=beta
+            )
+            hedge_contracts_to_trade = hedge_details['required_hedge_contracts']
 
-            # Fetch all required data concurrently for efficiency
-            tasks = {
-                "hist_data": data_fetcher_instance.fetch_historical_data('bybit', spot_symbol, '1h', limit=position['slow_ma'] + 5),
-                "spot_price": data_fetcher_instance.get_price('bybit', spot_symbol),
-                "perp_price": data_fetcher_instance.get_price('bybit', perp_symbol),
-            }
-            results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-            
-            # Unpack results and handle potential errors
-            hist_df, spot_price, perp_price = results
-            
-            if isinstance(hist_df, Exception) or hist_df is None or hist_df.empty:
-                log.warning(f"Could not fetch historical data for {spot_symbol}. Skipping check for {chat_id}. Error: {hist_df}")
-                continue
-            if isinstance(spot_price, Exception) or spot_price is None:
-                log.warning(f"Could not fetch spot price for {spot_symbol}. Skipping check for {chat_id}. Error: {spot_price}")
-                continue
-            if isinstance(perp_price, Exception) or perp_price is None:
-                log.warning(f"Could not fetch perp price for {perp_symbol}. Skipping check for {chat_id}. Error: {perp_price}")
-                continue
-
-            # --- 3. DETERMINE CURRENT MARKET REGIME ---
-            should_be_hedging = True  # Default if filter is off
-            regime_status_text = "N/A (Filter Off)"
-            if position['use_regime_filter']:
-                hist_df['fast_ma'] = hist_df['close'].rolling(window=position['fast_ma']).mean()
-                hist_df['slow_ma'] = hist_df['close'].rolling(window=position['slow_ma']).mean()
-                last_row = hist_df.iloc[-1]
+            # --- 5. Execute or Alert based on user's auto_hedge setting ---
+            if config['auto_hedge_enabled']:
+                # The auto-hedge logic with large trade confirmation safety check
+                hedge_value_usd = abs(hedge_contracts_to_trade * btc_perp_price)
+                large_trade_limit = config.get('large_trade_threshold')
                 
-                if pd.isna(last_row['slow_ma']):
-                    log.info(f"Not enough data yet for MA calculation for {chat_id}. Skipping regime check.")
+                if large_trade_limit and hedge_value_usd > large_trade_limit:
+                    log.warning(f"LARGE TRADE DETECTED for {chat_id}. Reverting to manual confirmation.")
+                    await context.bot.send_message(chat_id, f"⚠️ **Large Trade - Manual Confirmation Required!**\n\nThe required hedge of `${hedge_value_usd:,.2f}` exceeds your safety limit of `${large_trade_limit:,.2f}`.")
+                    # Fall through to send the manual confirmation alert below
                 else:
-                    should_be_hedging = last_row['fast_ma'] < last_row['slow_ma']
-                    regime_status_text = "BEARISH (Hedging ON)" if should_be_hedging else "BULLISH (Hedging OFF)"
+                    await context.bot.send_message(chat_id, "🚨 **Auto-Hedge Triggered!** Executing trade...")
+                    await execute_hedge_logic(context, chat_id, hedge_contracts_to_trade, config['asset'])
+                    continue # Move to the next user
             
-            log.info(f"Chat {chat_id}: Market regime is '{regime_status_text}'")
-
-            # --- 4. CALCULATE TARGET vs. CURRENT DELTA ---
-            spot_value = position['size'] * spot_price
-            # The delta we want to have after hedging
-            target_delta = spot_value * (1 - position['hedge_ratio'])
-            
-            # Get current perp holdings. 
-            # NOTE: For true accuracy, this should come from a live `fetch_positions` call.
-            # We are using our own DB history as a reliable proxy for this project.
-            last_hedge = db_manager.get_hedge_history(chat_id, limit=1)
-            current_perp_holding = last_hedge[0]['size'] if last_hedge and last_hedge[0]['hedge_type'] == 'perp' else 0
-            
-            perp_value = current_perp_holding * perp_price
-            current_delta = spot_value + perp_value
-
-            # --- 5. DECIDE IF A TRADE IS NEEDED ---
-            delta_to_correct = current_delta - target_delta
-            trade_needed = False
-            
-            if should_be_hedging:
-                # In a bearish market, we actively hedge. Trade if we drift from our target.
-                if abs(delta_to_correct) > position['delta_threshold']:
-                    trade_needed = True
-                    log.info(f"Chat {chat_id}: Trade needed. Delta drift (${delta_to_correct:,.2f}) exceeds threshold (${position['threshold']:.2f}).")
-            else:
-                # In a bullish market, our goal is to have no hedge. Close any existing hedge.
-                if abs(current_perp_holding) > 0.001:
-                    delta_to_correct = perp_value  # The correction needed is to close the entire perp position
-                    trade_needed = True
-                    log.info(f"Chat {chat_id}: Trade needed. In bullish regime, closing existing hedge of {current_perp_holding:.4f} contracts.")
-            
-            # --- 6. EXECUTE ACTION IF NEEDED ---
-            if trade_needed:
-                contracts_to_trade = -delta_to_correct / perp_price
-                
-                if abs(contracts_to_trade) < 0.001: # Avoid dust trades
-                    continue
-
-                if position['auto_hedge_enabled']:
-                    log.info(f"AUTO-HEDGING for {chat_id}: Executing trade for {contracts_to_trade:.4f} contracts.")
-                    # Use the existing execution logic function
-                    await execute_hedge_logic(context, chat_id, contracts_to_trade, position['asset'])
-                    # Send a confirmation to the user
-                    await context.bot.send_message(
-                        chat_id,
-                        text=f"✅ **Intelligent Auto-Hedge Executed!**\n\n**Reason:** Market is in `{regime_status_text}` and delta correction was required.\n**Action:** Placed simulated order for `{contracts_to_trade:.4f}` of `{perp_symbol}`.",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    # Send an interactive alert for manual confirmation
-                    message = (
-                        f"🚨 **Hedge Recommendation** 🚨\n\n"
-                        f"**Market Regime:** `{regime_status_text}`\n\n"
-                        f"**Current Delta:** `${current_delta:,.2f}`\n"
-                        f"**Target Delta:** `${target_delta:,.2f}` (based on {position['hedge_ratio']*100}% hedge ratio)\n\n"
-                        f"**Recommended Action:**\n"
-                        f"Trade `{contracts_to_trade:.4f}` of `{perp_symbol}` to align with your strategy."
-                    )
-                    keyboard = [
-                        [InlineKeyboardButton("✅ Execute Hedge (Simulated)", callback_data=f"hedge_now_{position['asset']}_{contracts_to_trade:.4f}")],
-                        [InlineKeyboardButton("Dismiss", callback_data="dismiss_alert")]
-                    ]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    await context.bot.send_message(chat_id, text=message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
-
-        except Exception as e:
-            log.error(f"An unexpected error occurred while processing position for chat_id {position.get('chat_id', 'N/A')}: {e}", exc_info=True)
+            # --- Send Manual Alert if auto_hedge is OFF or if a large trade was detected ---
+            message = (
+                f"🚨 **Delta Risk Alert: {config['asset']}** 🚨\n\n"
+                f"Your **net portfolio delta** of `${net_portfolio_delta_usd:,.2f}` has exceeded your threshold of `${config['delta_threshold']:,.2f}`.\n\n"
+                f"**Recommended Rebalancing Trade:**\nShort `{abs(hedge_contracts_to_trade):.4f}` of `{config['perp_symbol']}`."
+            )
+            keyboard = [
+                [InlineKeyboardButton("✅ Hedge Now (Simulated)", callback_data=f"hedge_now_{config['asset']}_{hedge_contracts_to_trade:.4f}")],
+                [
+                    InlineKeyboardButton("📊 View Analytics", callback_data="view_analytics"),
+                    InlineKeyboardButton("⚙️ Adjust Thresholds", callback_data="adjust_thresholds_prompt")
+                ],
+                [InlineKeyboardButton("Dismiss", callback_data="dismiss_alert")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await context.bot.send_message(chat_id, text=message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
 # --- UPDATE BUTTON HANDLER ---
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -569,23 +616,61 @@ async def send_portfolio_report(chat_id: int, context: ContextTypes.DEFAULT_TYPE
     await context.bot.send_message(chat_id, report_text, parse_mode=ParseMode.MARKDOWN)
 
 async def monitor_risk_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Sets up monitoring for a user. This command clears any previous state
+    and initializes a new portfolio with the specified spot position.
+    """
     chat_id = update.effective_chat.id
     try:
-        # /monitor_risk BTC 1.5 500 [VAR_THRESHOLD]
+        # Example usage: /monitor_risk BTC 1.5 500 [VAR_THRESHOLD]
         args = context.args
-        if len(args) < 3: raise ValueError("Not enough arguments")
+        if len(args) < 3:
+            raise ValueError("Not enough arguments")
+
+        asset = args[0].upper()
+        size = float(args[1])
+        delta_threshold = float(args[2])
+        var_threshold = float(args[3]) if len(args) > 3 else None
         
+        # --- 1. First, clear any pre-existing portfolio state for this user ---
+        db_manager.clear_holdings(chat_id)
+        log.info(f"Cleared existing holdings for chat_id: {chat_id} before starting new monitoring.")
+
+        # --- 2. Set up the new monitoring configuration in the 'positions' table ---
         position_data = {
-            "chat_id": chat_id, "asset": args[0].upper(),
-            "spot_symbol": f"{args[0].upper()}/USDT", "perp_symbol": f"{args[0].upper()}/USDT:USDT",
-            "size": float(args[1]), "delta_threshold": float(args[2]),
-            # Optional VaR threshold
-            "var_threshold": float(args[3]) if len(args) > 3 else None
+            "chat_id": chat_id,
+            "asset": asset,
+            "spot_symbol": f"{asset}/USDT",
+            "perp_symbol": f"{asset}/USDT:USDT",
+            "size": size,
+            "delta_threshold": delta_threshold,
+            "var_threshold": var_threshold,
         }
         db_manager.upsert_position(chat_id, position_data)
-        await update.message.reply_text("✅ Monitoring enabled. Use `/hedge_status` to see your settings.", parse_mode=ParseMode.MARKDOWN)
-    except (IndexError, ValueError):
-        await update.message.reply_text("❌ Usage: `/monitor_risk <ASSET> <SIZE> <DELTA_USD> [VAR_USD]`", parse_mode=ParseMode.MARKDOWN)
+
+        # --- 3. Add the initial spot position to the new 'portfolio_holdings' state table ---
+        db_manager.upsert_holding(
+            chat_id=chat_id,
+            symbol=position_data['spot_symbol'],
+            asset_type='spot',
+            quantity_change=position_data['size']
+        )
+        
+        await update.message.reply_text(
+            "✅ **Monitoring Enabled & Portfolio Reset**\n\n"
+            "Your portfolio state has been initialized with your spot position. "
+            "Use `/hedge_status` to see your settings.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    except (IndexError, ValueError) as e:
+        log.warning(f"Invalid monitor_risk command from {chat_id}: {e}")
+        await update.message.reply_text(
+            "❌ **Invalid Format.**\n"
+            "Usage: `/monitor_risk <ASSET> <SIZE> <DELTA_THRESHOLD_USD> [VAR_THRESHOLD_USD]`\n"
+            "Example: `/monitor_risk BTC 1.5 500 2000`",
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
@@ -738,3 +823,68 @@ async def configure_strategy_command(update: Update, context: ContextTypes.DEFAU
         )
     except (IndexError, ValueError):
         await update.message.reply_text("Usage: `/configure_strategy <hedge_ratio> <use_regime_filter (on|off)>`\nExample: `/configure_strategy 0.6 on`")
+
+async def set_large_trade_limit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    position = db_manager.get_position(chat_id)
+    if not position:
+        await update.message.reply_text("❌ Please set up a position with `/monitor_risk` first.")
+        return
+    try:
+        limit_str = context.args[0]
+        if limit_str.lower() == 'off':
+            limit = None
+            message = "✅ Large trade limit has been removed."
+        else:
+            limit = float(limit_str)
+            if limit <= 0: raise ValueError()
+            message = f"✅ Large trade limit set to `${limit:,.2f}`."
+        
+        position['large_trade_threshold'] = limit
+        db_manager.upsert_position(chat_id, position)
+        await update.message.reply_text(message)
+    except (IndexError, ValueError):
+        await update.message.reply_text("❌ Usage: `/set_large_trade_limit <USD_VALUE>` or `/set_large_trade_limit off`")
+
+async def select_put_strike(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Saves the put strike and asks for the call strike."""
+    query = update.callback_query
+    await query.answer()
+    
+    put_strike = int(query.data.split('_')[1])
+    context.user_data['put_strike'] = put_strike
+
+    await query.edit_message_text("Put strike selected. Now, fetching valid strikes for the **Covered Call**.")
+
+    # Fetch all BTC option instruments for the selected expiry
+    expiry = context.user_data['expiry']
+    instruments = await data_fetcher_instance.fetch_option_instruments('BTC')
+    if not instruments:
+        await query.edit_message_text("❌ Could not fetch options data from Deribit. Please try again later.")
+        return ConversationHandler.END
+
+    # Filter for CALLS with the same expiry and strike > put_strike
+    call_strikes = []
+    for i in instruments:
+        parts = i.split('-')
+        if parts[1] == expiry and parts[3] == 'C':
+            strike = int(parts[2])
+            if strike > put_strike:
+                call_strikes.append(strike)
+
+    if not call_strikes:
+        await query.edit_message_text("❌ No valid call strikes found above your selected put strike. Please try a different put strike.")
+        return ConversationHandler.END
+
+    strikes = sorted(call_strikes)
+    # Show up to 5 strikes above the put strike for user convenience
+    display_strikes = strikes[:5]
+
+    keyboard = [[InlineKeyboardButton(f"Call Strike: ${s:,.0f}", callback_data=f"strike_{s}")] for s in display_strikes]
+    keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+
+    await query.edit_message_text(
+        f"Please select a **Call Strike Price** (must be > ${put_strike:,})",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return SELECT_STRIKE  # Both collar and single-leg paths now converge here

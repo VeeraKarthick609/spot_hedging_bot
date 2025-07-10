@@ -20,7 +20,10 @@ from bot.handlers import (
     adjust_threshold_start, adjust_delta_received, adjust_var_received, 
     cancel_adjustment, send_daily_summary, ADJUST_DELTA, ADJUST_VAR,
     send_portfolio_report, execute_hedge_logic, 
-    generate_report_command, configure_strategy_command
+    generate_report_command, configure_strategy_command,
+    set_large_trade_limit_command,
+    select_put_strike,
+    SELECT_PUT_STRIKE, SELECT_CALL_STRIKE
 )
 from services.data_fetcher import data_fetcher_instance
 from database import db_manager
@@ -57,6 +60,7 @@ def main() -> None:
         states={
             SELECT_STRATEGY: [CallbackQueryHandler(select_strategy, pattern="^strategy_")],
             SELECT_EXPIRY: [CallbackQueryHandler(select_expiry, pattern="^expiry_")],
+            SELECT_PUT_STRIKE: [CallbackQueryHandler(select_put_strike, pattern="^strike_")],
             SELECT_STRIKE: [CallbackQueryHandler(select_strike, pattern="^strike_")],
             CONFIRM_HEDGE: [CallbackQueryHandler(confirm_hedge, pattern="^confirm_hedge")],
         },
@@ -81,6 +85,7 @@ def main() -> None:
     application.add_handler(CommandHandler("price", price_command))
     application.add_handler(CommandHandler("generate_report", generate_report_command))
     application.add_handler(CommandHandler("configure_strategy", configure_strategy_command))
+    application.add_handler(CommandHandler("set_large_trade_limit", set_large_trade_limit_command))
     
     # --- Register the General Callback Handler for non-conversation buttons ---
     application.add_handler(CallbackQueryHandler(button_callback_handler))
