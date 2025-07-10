@@ -80,10 +80,10 @@ async def main():
         print("=" * 50)
         
         # Download spot data
-        await download_historical_data("BTC/USDT", "1h", "2023-01-01T00:00:00Z")
+        await download_historical_data("BTC/USDT", "1d", "2023-01-01T00:00:00Z")
         
         # Download perpetual futures data
-        await download_historical_data("BTC/USDT:USDT", "1h", "2023-01-01T00:00:00Z")
+        await download_historical_data("BTC/USDT:USDT", "1d", "2023-01-01T00:00:00Z")
         
         print("🎉 All downloads completed!")
         
