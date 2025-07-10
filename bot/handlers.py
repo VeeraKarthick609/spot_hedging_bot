@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InputFile, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
 import asyncio
@@ -14,7 +14,7 @@ from core.risk_engine import risk_engine_instance
 from database import db_manager
 from utils.pdf_generator import create_report_pdf
 import pandas as pd
-
+from reporting import reporting_manager
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ user_positions = {}
 SELECT_STRATEGY, SELECT_EXPIRY, SELECT_STRIKE, CONFIRM_HEDGE = range(4)
 ADJUST_DELTA, ADJUST_VAR = range(10, 12) # Use higher numbers to avoid conflict
 SELECT_PUT_STRIKE, SELECT_CALL_STRIKE = range(20, 22)
+SELECT_BUY_PUT, SELECT_SELL_PUT, SELECT_SELL_CALL, SELECT_BUY_CALL, CONFIRM_CONDOR = range(30, 35)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends an updated welcome message with all commands."""
@@ -165,6 +166,7 @@ async def hedge_options_command(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("Buy Protective Put (Downside Protection)", callback_data="strategy_put")],
         [InlineKeyboardButton("Sell Covered Call (Generate Income)", callback_data="strategy_call")],
         [InlineKeyboardButton("Create Collar (Put+Call)", callback_data="strategy_collar")],
+        [InlineKeyboardButton("Create Iron Condor", callback_data="strategy_condor")],
         [InlineKeyboardButton("Cancel", callback_data="cancel")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -183,6 +185,8 @@ async def select_strategy(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     
     context.user_data['strategy'] = query.data # e.g., 'strategy_put'
+    if context.user_data['strategy'] == 'strategy_condor':
+        await query.edit_message_text("An Iron Condor is a 4-leg, range-bound strategy.\nFirst, let's choose an expiry date for all legs.")
     if context.user_data['strategy'] == 'strategy_collar':
         await query.edit_message_text("A collar protects your downside while capping your upside.\nFirst, let's choose the **Protective Put**.")
     
@@ -215,12 +219,83 @@ async def select_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     expiry = query.data.split('_')[1]
     context.user_data['expiry'] = expiry
-    if context.user_data['strategy'] == 'strategy_collar':
-        # For a collar, the next step is selecting the PUT strike
-        await query.edit_message_text(f"Please select a **Put Strike Price**:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-        return SELECT_PUT_STRIKE
-    else:
     
+    if context.user_data['strategy'] == 'strategy_condor':
+        # For condor, we need to get strikes for the long put selection
+        await query.edit_message_text("Fetching available strike prices...")
+        
+        # Get current BTC price to suggest relevant strikes
+        btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+        if not btc_price:
+            await query.edit_message_text("❌ Could not fetch BTC price. Please try again.")
+            return ConversationHandler.END
+
+        # Get all instruments and filter for the chosen expiry and PUT options
+        instruments = await data_fetcher_instance.fetch_option_instruments('BTC')
+        
+        relevant_strikes = []
+        for i in instruments:
+            parts = i.split('-')
+            if parts[1] == expiry and parts[3] == 'P':  # PUT options for condor
+                relevant_strikes.append(int(parts[2]))
+        
+        # Find strikes closest to the current price (ATM, and a few OTM/ITM)
+        strikes = sorted(relevant_strikes)
+        closest_strike = min(strikes, key=lambda x:abs(x-btc_price))
+        closest_index = strikes.index(closest_strike)
+        
+        # Show 2 strikes below, the ATM strike, and 2 strikes above
+        display_strikes = strikes[max(0, closest_index-2):closest_index+3]
+        
+        keyboard = [[InlineKeyboardButton(f"Strike: ${s:,.0f}", callback_data=f"strike_{s}")] for s in display_strikes]
+        keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+        
+        await query.edit_message_text(
+            f"Current BTC Price: `${btc_price:,.2f}`\nStep 1/4: Select the **long Put** strike (your lower protection):", 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return SELECT_BUY_PUT
+        
+    elif context.user_data['strategy'] == 'strategy_collar':
+        # For collar, get strikes for PUT selection
+        await query.edit_message_text("Fetching available strike prices...")
+        
+        # Get current BTC price to suggest relevant strikes
+        btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+        if not btc_price:
+            await query.edit_message_text("❌ Could not fetch BTC price. Please try again.")
+            return ConversationHandler.END
+
+        # Get all instruments and filter for the chosen expiry and PUT options
+        instruments = await data_fetcher_instance.fetch_option_instruments('BTC')
+        
+        relevant_strikes = []
+        for i in instruments:
+            parts = i.split('-')
+            if parts[1] == expiry and parts[3] == 'P':  # PUT options for collar
+                relevant_strikes.append(int(parts[2]))
+        
+        # Find strikes closest to the current price (ATM, and a few OTM/ITM)
+        strikes = sorted(relevant_strikes)
+        closest_strike = min(strikes, key=lambda x:abs(x-btc_price))
+        closest_index = strikes.index(closest_strike)
+        
+        # Show 2 strikes below, the ATM strike, and 2 strikes above
+        display_strikes = strikes[max(0, closest_index-2):closest_index+3]
+        
+        keyboard = [[InlineKeyboardButton(f"Strike: ${s:,.0f}", callback_data=f"strike_{s}")] for s in display_strikes]
+        keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+        
+        await query.edit_message_text(
+            f"Current BTC Price: `${btc_price:,.2f}`\nPlease select a **Put Strike Price**:", 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return SELECT_PUT_STRIKE
+        
+    else:
+        # For other strategies (single options)
         await query.edit_message_text("Fetching available strike prices...")
         
         # Get current BTC price to suggest relevant strikes
@@ -250,7 +325,11 @@ async def select_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         keyboard = [[InlineKeyboardButton(f"Strike: ${s:,.0f}", callback_data=f"strike_{s}")] for s in display_strikes]
         keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
 
-        await query.edit_message_text(f"Current BTC Price: `${btc_price:,.2f}`\nPlease select a strike price:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text(
+            f"Current BTC Price: `${btc_price:,.2f}`\nPlease select a strike price:", 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode=ParseMode.MARKDOWN
+        )
         return SELECT_STRIKE
 
 async def select_strike(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -548,6 +627,14 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()  # Acknowledge the button press immediately
     data = query.data
     chat_id = query.message.chat.id
+
+    if data.startswith("stress_"):
+        await handle_stress_test_callback(update, context)
+        return
+    
+    if data.startswith("export_"):
+        await handle_export_callback(update, context)
+        return
 
     if data.startswith("hedge_now"):
         await query.edit_message_text(text="*Finding best execution venue and estimating costs...*", parse_mode=ParseMode.MARKDOWN)
@@ -888,3 +975,251 @@ async def select_put_strike(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return SELECT_STRIKE  # Both collar and single-leg paths now converge here
+
+async def export_data_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Provides buttons to export user data as CSV files."""
+    keyboard = [
+        [InlineKeyboardButton("Export My Settings Report", callback_data="export_settings")],
+        [InlineKeyboardButton("Export My Trade History", callback_data="export_history")],
+    ]
+    await update.message.reply_text(
+        "**Data Export & Reporting**\n\n"
+        "Please choose a report to generate. The data will be sent as a CSV file, which can be used for compliance or personal record-keeping.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def handle_export_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the button clicks for data export."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Generating your report...")
+
+    # Fix: Use query.message.chat.id instead of query.effective_chat.id
+    chat_id = query.message.chat.id
+    
+    if query.data == 'export_settings':
+        csv_buffer = reporting_manager.generate_position_report_csv(chat_id)
+        filename = f"position_report_{chat_id}.csv"
+        caption = "Your current risk configuration and settings."
+    elif query.data == 'export_history':
+        csv_buffer = reporting_manager.generate_trade_history_csv(chat_id)
+        filename = f"trade_history_{chat_id}.csv"
+        caption = "A complete ledger of your simulated hedge trades."
+    else:
+        return
+
+    if csv_buffer:
+        # We need to create an InputFile object for Telegram
+        input_file = InputFile(csv_buffer, filename=filename)
+        await context.bot.send_document(chat_id=chat_id, document=input_file, caption=caption)
+    else:
+        await context.bot.send_message(chat_id, "ℹ️ No data found to generate the report.")
+        
+async def select_buy_put(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the first leg of the Iron Condor: Buying a Put."""
+    query = update.callback_query
+    await query.answer()
+    
+    strike = int(query.data.split('_')[1])
+    context.user_data['buy_put_strike'] = strike
+    
+    await query.edit_message_text("Fetching valid strikes for the short put...")
+    
+    expiry = context.user_data['expiry']
+    instruments = await data_fetcher_instance.fetch_option_instruments('BTC')
+    
+    # Filter for put strikes that are HIGHER than the one we just bought
+    relevant_strikes = sorted([
+        int(i.split('-')[2]) for i in instruments 
+        if i.split('-')[1] == expiry and i.split('-')[3] == 'P' and int(i.split('-')[2]) > strike
+    ])
+
+    # Suggest a few relevant strikes
+    display_strikes = relevant_strikes[:5] # Show the next 5 available strikes
+    keyboard = [[InlineKeyboardButton(f"Strike: ${s:,.0f}", callback_data=f"strike_{s}")] for s in display_strikes]
+    keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+
+    await query.edit_message_text(f"✅ Step 1/4: Long Put @ ${strike:,}\n\nStep 2/4: Select the **short Put** strike.", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_SELL_PUT
+
+async def select_buy_call(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the final leg, calculates the full strategy, and shows confirmation."""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data['buy_call_strike'] = int(query.data.split('_')[1])
+    
+    await query.edit_message_text("Calculating all 4 legs of the Iron Condor...")
+    
+    # --- Full Iron Condor Calculation Logic ---
+    try:
+        ud = context.user_data
+        expiry = ud['expiry']
+        asset = 'BTC'
+        
+        # 1. Construct all 4 instrument names
+        names = {
+            'buy_put': f"{asset}-{expiry}-{ud['buy_put_strike']}-P",
+            'sell_put': f"{asset}-{expiry}-{ud['sell_put_strike']}-P",
+            'sell_call': f"{asset}-{expiry}-{ud['sell_call_strike']}-C",
+            'buy_call': f"{asset}-{expiry}-{ud['buy_call_strike']}-C",
+        }
+        
+        # 2. Fetch all data concurrently
+        btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+        tickers = await asyncio.gather(*[data_fetcher_instance.fetch_option_ticker(n) for n in names.values()])
+        
+        # 3. Calculate all greeks concurrently
+        greeks_tasks = [risk_engine_instance.calculate_option_greeks(btc_price, t) for t in tickers]
+        all_greeks = await asyncio.gather(*greeks_tasks)
+        
+        # 4. Aggregate results
+        net_premium = (-all_greeks[0]['price'] + all_greeks[1]['price'] + all_greeks[2]['price'] - all_greeks[3]['price'])
+        net_delta = (-all_greeks[0]['delta'] + all_greeks[1]['delta'] + all_greeks[2]['delta'] - all_greeks[3]['delta'])
+        # ... and so on for Gamma, Vega, Theta
+
+        message = (
+            f"✅ **Iron Condor Confirmation**\n\n"
+            f"This is a range-bound strategy that profits if BTC stays between your short strikes.\n\n"
+            f"**Legs:**\n"
+            f"🔹 `BUY  {names['buy_put']}`\n"
+            f"🔹 `SELL {names['sell_put']}`\n"
+            f"🔹 `SELL {names['sell_call']}`\n"
+            f"🔹 `BUY  {names['buy_call']}`\n\n"
+            f"--- **Strategy Profile** ---\n"
+            f"**Net Premium Received:** `${net_premium:,.2f}`\n"
+            f"**Net Delta:** `{net_delta:.4f}` (Should be near zero)\n\n"
+            f"This action will open a 4-leg options position."
+        )
+        keyboard = [
+            [InlineKeyboardButton("Confirm (Simulated)", callback_data="confirm_hedge")],
+            [InlineKeyboardButton("Cancel", callback_data="cancel")]
+        ]
+        await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+
+    except Exception as e:
+        log.error(f"Error calculating Iron Condor: {e}")
+        await query.edit_message_text("❌ An error occurred while calculating the strategy. Please try again.")
+        return ConversationHandler.END
+
+    return CONFIRM_CONDOR # Use a unified confirmation state
+
+async def select_sell_call(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the third leg of the Iron Condor: Selling a Call."""
+    query = update.callback_query
+    await query.answer()
+    
+    strike = int(query.data.split('_')[1])
+    context.user_data['sell_call_strike'] = strike
+    
+    await query.edit_message_text("Fetching valid strikes for the long call...")
+    
+    expiry = context.user_data['expiry']
+    instruments = await data_fetcher_instance.fetch_option_instruments('BTC')
+
+    # Filter for call strikes that are HIGHER than the one we just sold
+    relevant_strikes = sorted([
+        int(i.split('-')[2]) for i in instruments 
+        if i.split('-')[1] == expiry and i.split('-')[3] == 'C' and int(i.split('-')[2]) > strike
+    ])
+    
+    display_strikes = relevant_strikes[:5]
+    keyboard = [[InlineKeyboardButton(f"Strike: ${s:,.0f}", callback_data=f"strike_{s}")] for s in display_strikes]
+    keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+
+    await query.edit_message_text(f"✅ Step 3/4: Short Call @ ${strike:,}\n\nStep 4/4: Select the **long Call** strike.", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_BUY_CALL
+
+
+async def select_sell_put(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the second leg of the Iron Condor: Selling a Put."""
+    query = update.callback_query
+    await query.answer()
+    
+    strike = int(query.data.split('_')[1])
+    context.user_data['sell_put_strike'] = strike
+    
+    await query.edit_message_text("Fetching valid strikes for the short call...")
+    
+    expiry = context.user_data['expiry']
+    btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+    instruments = await data_fetcher_instance.fetch_option_instruments('BTC')
+    
+    # Filter for call strikes that are out-of-the-money (higher than current price)
+    relevant_strikes = sorted([
+        int(i.split('-')[2]) for i in instruments 
+        if i.split('-')[1] == expiry and i.split('-')[3] == 'C' and int(i.split('-')[2]) > btc_price
+    ])
+    
+    display_strikes = relevant_strikes[:5]
+    keyboard = [[InlineKeyboardButton(f"Strike: ${s:,.0f}", callback_data=f"strike_{s}")] for s in display_strikes]
+    keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+
+    await query.edit_message_text(f"✅ Step 2/4: Short Put @ ${strike:,}\n\nStep 3/4: Select the **short Call** strike.", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_SELL_CALL
+
+
+async def stress_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Starts the interactive stress test by sending scenario buttons."""
+    keyboard = [
+        [InlineKeyboardButton("Scenario: Market Crash (-20%)", callback_data="stress_crash")],
+        [InlineKeyboardButton("Scenario: Volatility Spike (+50%)", callback_data="stress_vol_spike")],
+    ]
+    await update.message.reply_text(
+        "Please choose a stress test scenario for your current portfolio:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def handle_stress_test_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the button clicks from the stress test command and sends the report."""
+    query = update.callback_query
+    await query.answer()
+    
+    chat_id = query.effective_chat.id
+    position = db_manager.get_position(chat_id)
+    if not position:
+        await query.edit_message_text("❌ No position found. Please set one up with /monitor_risk first.")
+        return
+        
+    await query.edit_message_text("Running stress test scenario...")
+    
+    # We assume a simple portfolio for the live bot's stress test
+    portfolio = [{'type': 'spot', 'asset': position['asset'], 'size': position['size']}]
+    btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+    if not btc_price:
+        await query.edit_message_text("❌ Could not fetch live price data to run the test.")
+        return
+
+    prices = {'BTC/USDT': btc_price}
+
+    scenario = {}
+    if query.data == 'stress_crash':
+        scenario = {'name': 'Market Crash (-20% Price)', 'price_change_pct': -0.20}
+    elif query.data == 'stress_vol_spike':
+        # NOTE: Our simple stress test mainly uses Delta/Gamma. A full Vega-based test
+        # would require re-pricing all options, which is very complex for a live response.
+        scenario = {'name': 'Volatility Spike', 'iv_change_pct': 0.50}
+
+    result = await risk_engine_instance.run_stress_test(portfolio, prices, scenario)
+
+    report_text = (
+        f"**🔬 Stress Test Result**\n\n"
+        f"**Scenario:** `{result['scenario_name']}`\n"
+        f"**Estimated P&L Impact:** `${result['stressed_pnl']:,.2f}`\n\n"
+        f"This is an approximation based on your portfolio's current risk profile."
+    )
+    await query.edit_message_text(report_text, parse_mode=ParseMode.MARKDOWN)
+
+async def export_data_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Provides buttons to export user data as CSV files."""
+    keyboard = [
+        [InlineKeyboardButton("Export My Settings Report", callback_data="export_settings")],
+        [InlineKeyboardButton("Export My Trade History", callback_data="export_history")],
+    ]
+    await update.message.reply_text(
+        "**Data Export & Reporting**\n\n"
+        "Please choose a report to generate. The data will be sent as a CSV file.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
