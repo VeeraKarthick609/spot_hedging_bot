@@ -1,4 +1,4 @@
-# This is the full, corrected content for main.py
+# This is the full, final, and corrected content for main.py
 
 import logging
 import asyncio
@@ -9,7 +9,7 @@ from telegram.ext import (
 )
 from telegram import InputFile
 
-# Import all necessary components
+# Import all necessary components from our modules
 import config
 from bot.handlers import (
     # Core Commands
@@ -23,27 +23,30 @@ from bot.handlers import (
     hedge_status_command, hedge_history_command, chart_command, portfolio_risk_command,
     stress_test_command, export_data_command,
     
+    # Machine Learning
+    ml_mode_command,
+    
     # Hedging & Utilities
     hedge_options_command, price_command,
     
-    # Callback Handlers
+    # Callback Handlers (for buttons)
     button_callback_handler, handle_export_callback,
     
-    # Options Conversation
+    # Options Conversation Flow
     select_strategy, select_expiry, select_strike, confirm_hedge, cancel_conversation,
     select_put_strike, select_buy_put, select_sell_put, select_sell_call, select_buy_call,
     
     # Background Jobs
     risk_check_job, send_daily_summary,
     
-    # States
+    # Conversation States (constants)
     SELECT_STRATEGY, SELECT_EXPIRY, SELECT_STRIKE, CONFIRM_HEDGE, 
     ADJUST_DELTA, ADJUST_VAR, SELECT_PUT_STRIKE,
     SELECT_BUY_PUT, SELECT_SELL_PUT, SELECT_SELL_CALL, SELECT_BUY_CALL, CONFIRM_CONDOR
 )
 from services.data_fetcher import data_fetcher_instance
 from database import db_manager
-from reporting import reporting_manager # Make sure to import this
+from reporting import reporting_manager
 
 # --- Setup Centralized Logging ---
 logging.basicConfig(
@@ -56,7 +59,7 @@ log = logging.getLogger(__name__)
 
 
 def main() -> None:
-    """The main function to set up and run the bot."""
+    """The main function to set up and run the entire bot application."""
     log.info("Starting bot...")
     application = Application.builder().token(config.TELEGRAM_TOKEN).build()
 
@@ -90,7 +93,7 @@ def main() -> None:
         conversation_timeout=600
     )
 
-    # Register conversation handlers first
+    # Register conversation handlers first to ensure they have priority
     application.add_handler(adjust_conv_handler)
     application.add_handler(options_conv_handler)
 
@@ -100,7 +103,8 @@ def main() -> None:
         "stop_monitoring": stop_monitoring_command, "auto_hedge": auto_hedge_command,
         "set_large_trade_limit": set_large_trade_limit_command, "hedge_status": hedge_status_command,
         "hedge_history": hedge_history_command, "chart": chart_command, "portfolio_risk": portfolio_risk_command,
-        "stress_test": stress_test_command, "export_data": export_data_command, "price": price_command
+        "stress_test": stress_test_command, "export_data": export_data_command, "price": price_command,
+        "ml_mode": ml_mode_command # Add the new ML command
     }
     for command, handler in command_handlers.items():
         application.add_handler(CommandHandler(command, handler))

@@ -21,7 +21,6 @@ log = logging.getLogger(__name__)
 # --- In-memory storage for demo purposes ---
 # In a production bot, this would be a database (e.g., SQLite, PostgreSQL).
 # Format: {chat_id: {"asset": "BTC", "symbol": "BTC/USDT", "size": 1.5, "threshold": 1000}}
-user_positions = {}
 
 # --- Options Hedging Conversation States ---
 SELECT_STRATEGY, SELECT_EXPIRY, SELECT_STRIKE, CONFIRM_HEDGE = range(4)
@@ -333,17 +332,23 @@ async def select_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return SELECT_STRIKE
 
 async def select_strike(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles strike choice and shows final confirmation."""
+    """Handles strike choice and shows final confirmation. Now uses db_manager."""
     query = update.callback_query
     await query.answer()
-    
+
+    chat_id = query.message.chat.id
+    position = db_manager.get_position(chat_id)
+    if not position:
+        await query.edit_message_text("❌ Error: Could not find your monitored position. Please /start over.")
+        return ConversationHandler.END
+
     if context.user_data['strategy'] == 'strategy_collar':
         # This is the second leg of the collar
         context.user_data['call_strike'] = int(query.data.split('_')[1])
         await query.edit_message_text("Calculating collar details...")
         
         # Get data for both options (put and call)
-        asset = user_positions[query.message.chat.id]['asset']
+        asset = position['asset'] # USE DB DATA
         raw_expiry = context.user_data['expiry']
         
         # Parse and format expiry
@@ -367,15 +372,15 @@ async def select_strike(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             return ConversationHandler.END
         
         # Calculate greeks for both options
-        put_greeks = risk_engine_instance.calculate_option_greeks(btc_price, put_ticker)
-        call_greeks = risk_engine_instance.calculate_option_greeks(btc_price, call_ticker)
+        put_greeks = await risk_engine_instance.calculate_option_greeks(btc_price, put_ticker)
+        call_greeks = await risk_engine_instance.calculate_option_greeks(btc_price, call_ticker)
         
         if not all([put_greeks, call_greeks]):
             await query.edit_message_text("❌ Error calculating option greeks. Cannot proceed.")
             return ConversationHandler.END
         
         # Calculate position sizes and costs
-        position_size = user_positions[query.message.chat.id]['size']
+        position_size = position['size'] # USE DB DATA
         put_contracts = abs(position_size / put_greeks['delta'])
         call_contracts = abs(position_size / call_greeks['delta'])
         
@@ -407,9 +412,10 @@ async def select_strike(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         context.user_data['strike'] = strike
         
         await query.edit_message_text("Calculating hedge details...")
+        use_ml_vol = context.user_data.get('use_ml_vol', False)
         
         # Construct the Deribit instrument name
-        asset = user_positions[query.message.chat.id]['asset']
+        asset = position['asset'] # USE DB DATA
         
         # Parse and format expiry from YYMMDD to DMMMMYY (e.g., 250708 -> 8JUL25)
         raw_expiry = context.user_data['expiry']  # assume in YYMMDD format like 250708
@@ -435,13 +441,13 @@ async def select_strike(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             await query.edit_message_text("❌ Error fetching live data. Cannot proceed.")
             return ConversationHandler.END
             
-        greeks = risk_engine_instance.calculate_option_greeks(btc_price, option_ticker)
+        greeks = await risk_engine_instance.calculate_option_greeks(btc_price, option_ticker, use_ml_vol=use_ml_vol)
         if not greeks:
             await query.edit_message_text("❌ Error calculating option greeks. Cannot proceed.")
             return ConversationHandler.END
     
         # Calculate how many contracts are needed to neutralize delta
-        position_size = user_positions[query.message.chat.id]['size']
+        position_size = position['size'] # USE DB DATA
         contracts_needed = abs(position_size / greeks['delta'])
         total_cost = contracts_needed * greeks['price']
     
@@ -492,42 +498,137 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.clear()
     return ConversationHandler.END
 
+# In handlers.py, replace the existing portfolio_risk_command with this one.
+
 async def portfolio_risk_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Provides a comprehensive risk report for the user's portfolio."""
+    """
+    Provides a comprehensive, state-aware risk report for the user's full portfolio,
+    including all spot, perpetual, and options holdings.
+    """
     chat_id = update.effective_chat.id
-    if chat_id not in user_positions:
-        await update.message.reply_text("❌ No position found. Use `/monitor_risk` to set one up.")
-        return
-        
-    await update.message.reply_text("Crunching the numbers... generating your portfolio risk report.", parse_mode=ParseMode.MARKDOWN)
+    msg = await update.message.reply_text("🔍 Analyzing your full portfolio... This may take a moment.")
 
-    # For this demo, we assume the portfolio is just the one monitored position.
-    # A full system would pull all positions from a database.
-    position = user_positions[chat_id]
-    portfolio = [{'type': 'spot', 'asset': position['asset'], 'size': position['size']}]
-    
-    # Get live prices
-    btc_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
-    if not btc_price:
-        await update.message.reply_text("❌ Could not fetch live price data.")
-        return
-        
-    prices = {'BTC/USDT': btc_price}
-    
-    # Calculate portfolio risk and VaR
-    risk_data = await risk_engine_instance.calculate_portfolio_risk(portfolio, prices)
-    var_data = await risk_engine_instance.calculate_historical_var(portfolio, prices)
+    try:
+        # --- 1. Fetch ALL holdings from the database ---
+        holdings = db_manager.get_holdings(chat_id)
+        if not holdings:
+            await msg.edit_text("❌ You have no holdings to analyze. Use `/monitor_risk` to start.")
+            return
 
-    report_text = (
-        f"**📊 Portfolio Risk Report**\n\n"
-        f"**Total Portfolio Delta:** `${risk_data['total_delta_usd']:,.2f}`\n"
-        f"_(This is your total directional exposure to the market.)_\n\n"
-        f"--- **Value at Risk (VaR)** ---\n"
-        f"**1-Day 95% VaR:** `${var_data:,.2f}`\n"
-        f"_(Based on historical simulation, there is a 5% chance your portfolio could lose at least this amount in the next 24 hours.)_"
-    )
-    
-    await update.message.reply_text(report_text, parse_mode=ParseMode.MARKDOWN)
+        # --- 2. Gather live data for all assets concurrently ---
+        btc_spot_price = await data_fetcher_instance.get_price('bybit', 'BTC/USDT')
+        if not btc_spot_price:
+            await msg.edit_text("❌ Critical error: Could not fetch the live price of BTC. Cannot generate report.")
+            return
+            
+        prices = {'BTC/USDT': btc_spot_price, 'BTC/USDT:USDT': btc_spot_price} # Assume perp price tracks spot closely for this report
+
+        portfolio_for_risk_calc = []
+        portfolio_details = []
+        
+        # --- 3. Process each holding to calculate its value and risk contribution ---
+        net_delta_btc, net_gamma_btc, net_vega_usd, net_theta_usd = 0.0, 0.0, 0.0, 0.0
+        total_portfolio_value_usd = 0.0
+
+        for holding in holdings:
+            asset_type = holding['asset_type']
+            symbol = holding['asset_symbol']
+            quantity = holding['quantity']
+            
+            # Add raw data for VaR calculation
+            portfolio_for_risk_calc.append({'type': asset_type, 'asset': 'BTC', 'size': quantity, 'symbol': symbol})
+
+            if asset_type == 'spot':
+                value_usd = quantity * btc_spot_price
+                delta_btc = quantity
+                portfolio_details.append({
+                    'type': 'SPOT', 'symbol': symbol, 'quantity': quantity,
+                    'value_usd': value_usd, 'delta_btc': delta_btc
+                })
+                net_delta_btc += delta_btc
+                total_portfolio_value_usd += value_usd
+
+            elif asset_type == 'perp':
+                notional_usd = quantity * btc_spot_price
+                delta_btc = quantity # Delta of a linear perp is 1:1
+                portfolio_details.append({
+                    'type': 'PERP', 'symbol': symbol, 'quantity': quantity,
+                    'value_usd': notional_usd, 'delta_btc': delta_btc
+                })
+                net_delta_btc += delta_btc
+                # Note: Perps don't add to portfolio value, they are liabilities/assets against cash (margin)
+
+            elif asset_type == 'option':
+                option_ticker = await data_fetcher_instance.fetch_option_ticker(symbol)
+                if not option_ticker:
+                    log.warning(f"Could not fetch ticker for option {symbol} for chat_id {chat_id}")
+                    continue
+                
+                greeks = await risk_engine_instance.calculate_option_greeks(btc_spot_price, option_ticker)
+                if not greeks:
+                    log.warning(f"Could not calculate greeks for option {symbol} for chat_id {chat_id}")
+                    continue
+
+                option_value_usd = quantity * greeks['price'] * btc_spot_price # price is in BTC
+                delta_btc = quantity * greeks['delta']
+                
+                portfolio_details.append({
+                    'type': 'OPTION', 'symbol': symbol, 'quantity': quantity,
+                    'value_usd': option_value_usd, 'delta_btc': delta_btc
+                })
+                net_delta_btc += delta_btc
+                net_gamma_btc += quantity * greeks['gamma']
+                net_vega_usd += quantity * greeks['vega']
+                net_theta_usd += quantity * greeks['theta']
+                total_portfolio_value_usd += option_value_usd
+        
+        # --- 4. Calculate final portfolio-level metrics ---
+        net_delta_usd = net_delta_btc * btc_spot_price
+        
+        # Use the full portfolio for VaR calculation
+        var_data = await risk_engine_instance.calculate_historical_var(portfolio_for_risk_calc, prices)
+
+        # --- 5. Format the report ---
+        report_text = f"**📊 Full Portfolio Risk Report**\n\n"
+        
+        # --- Summary Section ---
+        report_text += (
+            f"**Total Value (Spot & Options):** `${total_portfolio_value_usd:,.2f}`\n\n"
+            f"**Net Delta:** `{net_delta_btc:,.4f}` BTC (`${net_delta_usd:,.2f}`)\n"
+            f"_(Your total directional exposure. Positive is bullish, negative is bearish.)_\n\n"
+            f"**Net Gamma:** `{net_gamma_btc:,.4f}`\n"
+            f"_(Measures how fast your Delta will change. High gamma means high risk/reward.)_\n\n"
+            f"**Net Vega:** `${net_vega_usd:,.2f}`\n"
+            f"_(Your P&L change for a 1% rise in implied volatility.)_\n\n"
+            f"**Net Theta:** `${net_theta_usd:,.2f}`\n"
+            f"_(Your daily P&L decay from time passing.)_\n\n"
+        )
+        
+        # --- Composition Section ---
+        report_text += "**--- Portfolio Composition ---**\n"
+        for detail in portfolio_details:
+            sign = "＋" if detail['quantity'] > 0 else "－"
+            value_display = f"Val: ${abs(detail['value_usd']):,.2f}"
+            delta_display = f"Δ: {detail['delta_btc']:.3f} BTC"
+            
+            report_text += (
+                f"🔹 **`{detail['type']}`** `{detail['symbol']}`\n"
+                f"   `{sign} {abs(detail['quantity']):.4f}` | `{value_display}` | `{delta_display}`\n"
+            )
+        report_text += "\n"
+
+        # --- VaR Section ---
+        report_text += (
+            f"**--- Value at Risk (VaR) ---**\n"
+            f"**1-Day 95% VaR:** `${var_data:,.2f}`\n"
+            f"_(Based on your net exposure, there's a 5% chance your portfolio could lose at least this amount in 24 hours.)_"
+        )
+
+        await msg.edit_text(report_text, parse_mode=ParseMode.MARKDOWN)
+
+    except Exception as e:
+        log.error(f"Failed to generate full portfolio risk report for {chat_id}: {e}", exc_info=True)
+        await msg.edit_text("❌ An unexpected error occurred while generating your report. The developers have been notified.")
 
 # --- BACKGROUND JOB ---
 # This is an async function in bot/handlers.py
@@ -1051,6 +1152,7 @@ async def select_buy_call(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data['buy_call_strike'] = int(query.data.split('_')[1])
     
     await query.edit_message_text("Calculating all 4 legs of the Iron Condor...")
+    use_ml_vol = context.user_data.get('use_ml_vol', False)
     
     # --- Full Iron Condor Calculation Logic ---
     try:
@@ -1071,13 +1173,17 @@ async def select_buy_call(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         tickers = await asyncio.gather(*[data_fetcher_instance.fetch_option_ticker(n) for n in names.values()])
         
         # 3. Calculate all greeks concurrently
-        greeks_tasks = [risk_engine_instance.calculate_option_greeks(btc_price, t) for t in tickers]
+        greeks_tasks = [risk_engine_instance.calculate_option_greeks(btc_price, t, use_ml_vol=use_ml_vol) for t in tickers]
         all_greeks = await asyncio.gather(*greeks_tasks)
         
         # 4. Aggregate results
+        # Iron Condor: Buy Put, Sell Put, Sell Call, Buy Call (in that order)
+        # Net premium: -buy_put + sell_put + sell_call - buy_call
         net_premium = (-all_greeks[0]['price'] + all_greeks[1]['price'] + all_greeks[2]['price'] - all_greeks[3]['price'])
         net_delta = (-all_greeks[0]['delta'] + all_greeks[1]['delta'] + all_greeks[2]['delta'] - all_greeks[3]['delta'])
-        # ... and so on for Gamma, Vega, Theta
+        net_gamma = (-all_greeks[0]['gamma'] + all_greeks[1]['gamma'] + all_greeks[2]['gamma'] - all_greeks[3]['gamma'])
+        net_vega = (-all_greeks[0]['vega'] + all_greeks[1]['vega'] + all_greeks[2]['vega'] - all_greeks[3]['vega'])
+        net_theta = (-all_greeks[0]['theta'] + all_greeks[1]['theta'] + all_greeks[2]['theta'] - all_greeks[3]['theta'])
 
         message = (
             f"✅ **Iron Condor Confirmation**\n\n"
@@ -1223,3 +1329,21 @@ async def export_data_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
+
+async def ml_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggles whether to use ML volatility forecasts."""
+    chat_id = update.effective_chat.id
+    # We store the user's choice in context.user_data (temporary per session)
+    # A more permanent solution would be a new column in the database.
+    
+    current_mode = context.user_data.get('use_ml_vol', False)
+    new_mode = not current_mode
+    context.user_data['use_ml_vol'] = new_mode
+    
+    status = "ENABLED" if new_mode else "DISABLED"
+    message = (
+        f"🧠 **ML Volatility Forecasting is now {status}.**\n\n"
+        f"When enabled, all options calculations will use our GARCH model's "
+        f"forecast instead of the market's implied volatility."
+    )
+    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)

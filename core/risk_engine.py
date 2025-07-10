@@ -4,20 +4,24 @@ import logging
 import time
 import asyncio
 from py_vollib.black_scholes.greeks.analytical import delta, gamma, vega, theta
-from datetime import datetime
+from py_vollib.black_scholes import black_scholes
+from datetime import datetime, timezone
 import io
+import os
+import joblib
 import matplotlib
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
 from typing import List, Dict
 # matplotlib.use('Agg') # Use non-interactive backend for matplotlib
-
+from arch.univariate.base import ARCHModelResult
 
 # Import our real data source
 from services.data_fetcher import data_fetcher_instance
 
 log = logging.getLogger(__name__)
+MODEL_PATH = os.path.join(os.path.dirname(__file__), 'garch_model.pkl')
 
 class RiskEngine:
     def __init__(self):
@@ -25,8 +29,20 @@ class RiskEngine:
         # Format: {"BTC/USDT:BTC/USDT:USDT": {"beta": 1.01, "timestamp": 167...}}
         self.beta_cache = {}
         self.cache_duration_seconds = 4 * 60 * 60  # Cache beta for 4 hours
+        self.garch_model = self.load_garch_model()
         log.info("RiskEngine initialized with caching enabled.")
 
+    def load_garch_model(self) -> ARCHModelResult | None:
+        """Loads the pre-trained GARCH model from disk."""
+        try:
+            model = joblib.load(MODEL_PATH)
+            log.info("✅ GARCH volatility model loaded successfully.")
+            return model
+        except FileNotFoundError:
+            log.warning(f"⚠️ GARCH model file not found at {MODEL_PATH}. ML features will be disabled.")
+            log.warning("Run 'scripts/train_volatility_model.py' to create it.")
+            return None
+        
     async def calculate_beta(self, spot_symbol: str, perp_symbol: str, exchange: str = 'bybit') -> float | None:
         """
         Calculates the hedge ratio (beta) using real historical data from the exchange.
@@ -97,27 +113,122 @@ class RiskEngine:
             "required_hedge_contracts": required_hedge_contracts
         }
     
-    def calculate_option_greeks(self, underlying_price: float, option_ticker: dict) -> dict | None:
+    def get_forecasted_volatility(self) -> float | None:
         """
-        Calculates the greeks for a single option using its live ticker data.
+        Uses the loaded GARCH model to forecast the next day's volatility,
+        then annualizes it for use in options pricing.
+        """
+        if not self.garch_model:
+            log.error("Cannot forecast volatility: GARCH model not loaded.")
+            return None
         
-        :param underlying_price: Current price of the asset (e.g., BTC).
-        :param option_ticker: The full ticker dictionary from data_fetcher.fetch_option_ticker.
-        :return: A dictionary containing the calculated greeks.
+        # Forecast 1 step (day) ahead
+        forecast = self.garch_model.forecast(horizon=1)
+        
+        # The result from the model is in squared variance (e.g., 4 if daily vol is 2%).
+        # We take the square root to get the standard deviation (volatility).
+        next_day_variance = forecast.variance.iloc[-1, 0]
+        daily_vol_pct = np.sqrt(next_day_variance)
+        
+        # Convert from percentage points (e.g., 2.0 -> 0.02) and annualize for Black-Scholes.
+        daily_vol = daily_vol_pct / 100
+        annualized_vol = daily_vol * np.sqrt(365)
+        
+        log.info(f"GARCH Forecast (Annualized): {annualized_vol:.4f}")
+        return annualized_vol
+    
+    async def calculate_option_greeks(self, underlying_price: float, option_ticker: dict, use_ml_vol: bool = False) -> dict | None:
+        """
+        Calculates greeks using a hybrid approach. This version is hardened to
+        be self-contained, robustly parsing all required parameters directly from
+        the provided option_ticker object without extra arguments.
         """
         try:
-            # Get greeks from the correct path in the data structure
-            greeks_data = option_ticker.get("info", {}).get("greeks", {})
-            
-            return {
-                "delta": float(greeks_data.get('delta', 0)),  # Delta per $1 price change (already correct scale)
-                "gamma": float(greeks_data.get('gamma', 0)),  # Gamma per $1 price change (already correct scale)
-                "vega": float(greeks_data.get("vega", 0)),    # Vega per 1% vol change (already correct scale)
-                "theta": float(greeks_data.get("theta", 0)),  # Theta per day (already correct scale)
-                "price": float(option_ticker.get('mark_price') or option_ticker.get('info', {}).get('mark_price', 0)) * float(underlying_price),  # Deribit price is in BTC, convert to USD
-            }
+            # --- THE DEFINITIVE FIX: Get the raw instrument name from the 'info' dict ---
+            # This is the guaranteed source for the 'ddMMMyy' date format.
+            instrument_name = option_ticker.get('info', {}).get('instrument_name')
+            if not instrument_name:
+                # Fallback for safety, though 'info' should always be present for Deribit
+                instrument_name = option_ticker.get('symbol')
+                if not instrument_name:
+                    log.error("Could not find a valid instrument name or symbol in option_ticker.")
+                    return None
+            # --- END OF FIX ---
+
+            # --- Path 1: ML-Powered Predictive Calculation ---
+            if use_ml_vol and self.garch_model:
+                log.info(f"ML Mode ON: Performing custom Black-Scholes for {instrument_name}")
+                
+                forecasted_vol = self.get_forecasted_volatility()
+                if not forecasted_vol: 
+                    log.error("ML forecast failed. Cannot proceed.")
+                    return None
+                
+                sigma = forecasted_vol
+                S = float(underlying_price)
+                
+                # Parse parameters from the robust instrument name
+                try:
+                    parts = instrument_name.split('-')
+                    expiry_str = parts[1]
+                    K = float(parts[2])
+                    option_type_flag = 'p' if parts[3] == 'P' else 'c'
+                except (IndexError, ValueError) as e:
+                    log.error(f"Could not parse instrument symbol '{instrument_name}': {e}")
+                    return None
+                
+                r = 0.0
+                expiry_date = datetime.strptime(expiry_str, '%d%b%y')
+                expiry_datetime = expiry_date.replace(hour=8, minute=0, second=0, tzinfo=timezone.utc)
+                time_to_expiry_seconds = (expiry_datetime - datetime.now(timezone.utc)).total_seconds()
+                
+                if time_to_expiry_seconds < 0: 
+                    log.warning(f"Option {instrument_name} has already expired.")
+                    return None
+                
+                T = time_to_expiry_seconds / (365.25 * 24 * 60 * 60)
+
+                # --- THE FINAL FIX: Remove the incorrect multiplication by S ---
+                # The black_scholes function's output is already in the same currency unit as S and K (which is USD).
+                theoretical_usd_price = black_scholes(option_type_flag, S, K, T, r, sigma)
+
+                # Return the full set of calculated greeks and the correct theoretical price
+                return {
+                    "delta": delta(option_type_flag, S, K, T, r, sigma),
+                    "gamma": gamma(option_type_flag, S, K, T, r, sigma),
+                    "vega": vega(option_type_flag, S, K, T, r, sigma) / 100,
+                    "theta": theta(option_type_flag, S, K, T, r, sigma) / 365,
+                    "price": theoretical_usd_price, # Use the direct USD price, not price * S
+                }
+
+            # --- Path 2: Default, Fast, and Reliable Exchange Data ---
+            else:
+                log.info(f"ML Mode OFF: Using exchange-provided greeks for {instrument_name}")
+                greeks_data = option_ticker.get("greeks", {}) or option_ticker.get("info", {}).get("greeks", {})
+                if not greeks_data: return None
+
+                mark_price_in_btc = option_ticker.get('markPrice') or option_ticker.get('info', {}).get('mark_price')
+                if mark_price_in_btc is None: return None
+                
+                # --- THE FIX IS HERE ---
+                # We calculate the USD price from the mark price and underlying,
+                # completely ignoring whatever might be in greeks_data['price'].
+                # This ensures the price is always correct.
+                usd_price = float(mark_price_in_btc) * float(underlying_price)
+                
+                return {
+                    "delta": float(greeks_data.get('delta', 0)),
+                    "gamma": float(greeks_data.get('gamma', 0)),
+                    "vega": float(greeks_data.get("vega", 0)),
+                    "theta": float(greeks_data.get("theta", 0)),
+                    "price": usd_price, # Use our reliably calculated USD price.
+                }
+                # --- END OF FIX ---
+
         except Exception as e:
-            log.error(f"Error calculating greeks for {option_ticker.get('info', {}).get('instrument_name', 'N/A')}: {e}")
+            log.error(f"An unexpected error in calculate_option_greeks for {option_ticker.get('symbol', 'N/A')}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
         
     async def calculate_portfolio_risk(self, portfolio: list, prices: dict) -> dict:
@@ -147,7 +258,7 @@ class RiskEngine:
             elif pos_type == 'option':
                 option_ticker = await data_fetcher_instance.fetch_option_ticker(position['symbol'])
                 if option_ticker:
-                    greeks = self.calculate_option_greeks(btc_price, option_ticker)
+                    greeks = await self.calculate_option_greeks(btc_price, option_ticker)
                     if greeks:
                         # Convert Greek units to portfolio-level USD values
                         total_delta_usd += size * greeks['delta'] * btc_price
