@@ -488,20 +488,26 @@ class RiskEngine:
             spine.set_edgecolor('#333333')
             spine.set_linewidth(1.5)
 
-        # 6. --- Enhanced Date Formatting ---
+        # 6. --- FIXED: Enhanced Date Formatting with Tick Limiting ---
+        from matplotlib.ticker import MaxNLocator
+        
         # Better date formatting based on time range
         time_range = df['timestamp'].max() - df['timestamp'].min()
         if time_range.days > 7:
             date_format = mdates.DateFormatter('%m-%d')
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, time_range.days // 10)))
         elif time_range.days > 1:
             date_format = mdates.DateFormatter('%m-%d\n%H:%M')
-            ax.xaxis.set_major_locator(mdates.HourLocator(interval=6))
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=max(1, int(time_range.total_seconds() // 3600 // 10))))
         else:
             date_format = mdates.DateFormatter('%H:%M')
-            ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=max(1, int(time_range.total_seconds() // 3600 // 8))))
         
         ax.xaxis.set_major_formatter(date_format)
+        
+        # CRITICAL FIX: Limit the maximum number of ticks to prevent warnings
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=10))  # Max 10 ticks on x-axis
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=8))   # Max 8 ticks on y-axis
         
         # Rotate and style tick labels
         ax.tick_params(axis='x', colors='#ffffff', rotation=0, labelsize=10)

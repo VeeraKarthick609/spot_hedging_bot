@@ -1282,7 +1282,7 @@ async def handle_stress_test_callback(update: Update, context: ContextTypes.DEFA
     query = update.callback_query
     await query.answer()
     
-    chat_id = query.effective_chat.id
+    chat_id = query.message.chat.id
     position = db_manager.get_position(chat_id)
     if not position:
         await query.edit_message_text("❌ No position found. Please set one up with /monitor_risk first.")
