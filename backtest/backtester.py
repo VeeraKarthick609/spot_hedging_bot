@@ -50,8 +50,6 @@ class Backtester:
             self.portfolio.update_market_value(prices)
             self.portfolio.log_performance(timestamp)
 
-            # --- RE-ENGINEERED HEDGING LOGIC ---
-
             # 1. Determine the TARGET HEDGE RATIO based on the current regime.
             current_hedge_ratio = self.strategy['hedge_ratio'] # Default ratio
             regime_str = "(NEUTRAL)"

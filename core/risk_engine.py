@@ -144,16 +144,12 @@ class RiskEngine:
         the provided option_ticker object without extra arguments.
         """
         try:
-            # --- THE DEFINITIVE FIX: Get the raw instrument name from the 'info' dict ---
-            # This is the guaranteed source for the 'ddMMMyy' date format.
             instrument_name = option_ticker.get('info', {}).get('instrument_name')
             if not instrument_name:
-                # Fallback for safety, though 'info' should always be present for Deribit
                 instrument_name = option_ticker.get('symbol')
                 if not instrument_name:
                     log.error("Could not find a valid instrument name or symbol in option_ticker.")
                     return None
-            # --- END OF FIX ---
 
             # --- Path 1: ML-Powered Predictive Calculation ---
             if use_ml_vol and self.garch_model:
@@ -188,7 +184,6 @@ class RiskEngine:
                 
                 T = time_to_expiry_seconds / (365.25 * 24 * 60 * 60)
 
-                # --- THE FINAL FIX: Remove the incorrect multiplication by S ---
                 # The black_scholes function's output is already in the same currency unit as S and K (which is USD).
                 theoretical_usd_price = black_scholes(option_type_flag, S, K, T, r, sigma)
 
@@ -198,7 +193,7 @@ class RiskEngine:
                     "gamma": gamma(option_type_flag, S, K, T, r, sigma),
                     "vega": vega(option_type_flag, S, K, T, r, sigma) / 100,
                     "theta": theta(option_type_flag, S, K, T, r, sigma) / 365,
-                    "price": theoretical_usd_price, # Use the direct USD price, not price * S
+                    "price": theoretical_usd_price, # Use the direct USD price
                 }
 
             # --- Path 2: Default, Fast, and Reliable Exchange Data ---
@@ -210,7 +205,6 @@ class RiskEngine:
                 mark_price_in_btc = option_ticker.get('markPrice') or option_ticker.get('info', {}).get('mark_price')
                 if mark_price_in_btc is None: return None
                 
-                # --- THE FIX IS HERE ---
                 # We calculate the USD price from the mark price and underlying,
                 # completely ignoring whatever might be in greeks_data['price'].
                 # This ensures the price is always correct.
@@ -221,9 +215,8 @@ class RiskEngine:
                     "gamma": float(greeks_data.get('gamma', 0)),
                     "vega": float(greeks_data.get("vega", 0)),
                     "theta": float(greeks_data.get("theta", 0)),
-                    "price": usd_price, # Use our reliably calculated USD price.
+                    "price": usd_price, 
                 }
-                # --- END OF FIX ---
 
         except Exception as e:
             log.error(f"An unexpected error in calculate_option_greeks for {option_ticker.get('symbol', 'N/A')}: {e}")
@@ -393,8 +386,6 @@ class RiskEngine:
         
         # 3. Calculate the portfolio's value under stress
         # This is a simplified calculation. A full version would re-price every option.
-        # New Delta = Old Delta + Gamma * dS + ...
-        # For a quick estimate, we can use the greeks.
         dS = stressed_prices['BTC/USDT'] - prices['BTC/USDT']
         
         # P&L from Delta and Gamma are the main drivers of a stress test
@@ -488,10 +479,8 @@ class RiskEngine:
             spine.set_edgecolor('#333333')
             spine.set_linewidth(1.5)
 
-        # 6. --- FIXED: Enhanced Date Formatting with Tick Limiting ---
         from matplotlib.ticker import MaxNLocator
         
-        # Better date formatting based on time range
         time_range = df['timestamp'].max() - df['timestamp'].min()
         if time_range.days > 7:
             date_format = mdates.DateFormatter('%m-%d')
@@ -505,7 +494,6 @@ class RiskEngine:
         
         ax.xaxis.set_major_formatter(date_format)
         
-        # CRITICAL FIX: Limit the maximum number of ticks to prevent warnings
         ax.xaxis.set_major_locator(MaxNLocator(nbins=10))  # Max 10 ticks on x-axis
         ax.yaxis.set_major_locator(MaxNLocator(nbins=8))   # Max 8 ticks on y-axis
         

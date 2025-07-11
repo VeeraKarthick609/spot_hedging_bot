@@ -18,13 +18,10 @@ from reporting import reporting_manager
 
 log = logging.getLogger(__name__)
 
-# --- In-memory storage for demo purposes ---
-# In a production bot, this would be a database (e.g., SQLite, PostgreSQL).
-# Format: {chat_id: {"asset": "BTC", "symbol": "BTC/USDT", "size": 1.5, "threshold": 1000}}
-
 # --- Options Hedging Conversation States ---
+# Use higher numbers to avoid conflict
 SELECT_STRATEGY, SELECT_EXPIRY, SELECT_STRIKE, CONFIRM_HEDGE = range(4)
-ADJUST_DELTA, ADJUST_VAR = range(10, 12) # Use higher numbers to avoid conflict
+ADJUST_DELTA, ADJUST_VAR = range(10, 12) 
 SELECT_PUT_STRIKE, SELECT_CALL_STRIKE = range(20, 22)
 SELECT_BUY_PUT, SELECT_SELL_PUT, SELECT_SELL_CALL, SELECT_BUY_CALL, CONFIRM_CONDOR = range(30, 35)
 
@@ -498,8 +495,6 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.clear()
     return ConversationHandler.END
 
-# In handlers.py, replace the existing portfolio_risk_command with this one.
-
 async def portfolio_risk_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Provides a comprehensive, state-aware risk report for the user's full portfolio,
@@ -631,8 +626,6 @@ async def portfolio_risk_command(update: Update, context: ContextTypes.DEFAULT_T
         await msg.edit_text("❌ An unexpected error occurred while generating your report. The developers have been notified.")
 
 # --- BACKGROUND JOB ---
-# This is an async function in bot/handlers.py
-
 async def risk_check_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     The main background job, now using a state-aware portfolio delta calculation.
@@ -662,19 +655,25 @@ async def risk_check_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         # --- 2. Calculate NET portfolio delta ---
         net_portfolio_delta_usd = 0.0
-        for holding in holdings:
-            if holding['asset_type'] == 'spot':
-                # For now, we assume all spot is BTC. A future enhancement could fetch prices for other assets.
-                net_portfolio_delta_usd += holding['quantity'] * btc_spot_price
-            elif holding['asset_type'] == 'perp':
-                net_portfolio_delta_usd += holding['quantity'] * btc_perp_price
-            elif holding['asset_type'] == 'option':
-                # This requires fetching option ticker and greeks.
-                # A more advanced version would add this logic here.
-                # For now, this part is skipped.
-                pass
-        
-        log.info(f"Calculated Net Portfolio Delta for {chat_id}: ${net_portfolio_delta_usd:,.2f}")
+        try:
+            for holding in holdings:
+                if holding['asset_type'] == 'spot':
+                    net_portfolio_delta_usd += holding['quantity'] * btc_spot_price
+                
+                elif holding['asset_type'] == 'perp':
+                    net_portfolio_delta_usd += holding['quantity'] * btc_perp_price
+                
+                elif holding['asset_type'] == 'option':
+                    option_ticker = await data_fetcher_instance.fetch_option_ticker(holding['symbol'])
+                    if option_ticker:
+                        greeks = await risk_engine_instance.calculate_option_greeks(btc_spot_price, option_ticker, use_ml_vol=False)
+                        if greeks:
+                            net_portfolio_delta_usd += holding['quantity'] * greeks['delta'] * btc_spot_price
+        except Exception as e:
+            log.error(f"Error calculating net delta for user {chat_id}: {e}")
+            continue # Skip to the next user
+
+        log.info(f"User {chat_id}: Calculated Net Portfolio Delta = ${net_portfolio_delta_usd:,.2f}")
 
         # --- 3. Check if the NET delta exceeds the user's threshold ---
         if abs(net_portfolio_delta_usd) > config['delta_threshold']:
@@ -1096,7 +1095,6 @@ async def handle_export_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     await query.edit_message_text("Generating your report...")
 
-    # Fix: Use query.message.chat.id instead of query.effective_chat.id
     chat_id = query.message.chat.id
     
     if query.data == 'export_settings':
@@ -1303,8 +1301,6 @@ async def handle_stress_test_callback(update: Update, context: ContextTypes.DEFA
     if query.data == 'stress_crash':
         scenario = {'name': 'Market Crash (-20% Price)', 'price_change_pct': -0.20}
     elif query.data == 'stress_vol_spike':
-        # NOTE: Our simple stress test mainly uses Delta/Gamma. A full Vega-based test
-        # would require re-pricing all options, which is very complex for a live response.
         scenario = {'name': 'Volatility Spike', 'iv_change_pct': 0.50}
 
     result = await risk_engine_instance.run_stress_test(portfolio, prices, scenario)

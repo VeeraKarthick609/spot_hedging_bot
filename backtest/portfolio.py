@@ -20,7 +20,7 @@ class SimulatedPortfolio:
         # --- Cost and Performance Tracking Attributes ---
         self.total_commissions = 0.0
         # This was the missing line. We need to initialize total_slippage to zero.
-        self.total_slippage = 0.0  # <<< --- ADD THIS LINE ---
+        self.total_slippage = 0.0 
         
         self.history = pd.DataFrame(columns=['timestamp', 'total_value'])
 
@@ -38,8 +38,6 @@ class SimulatedPortfolio:
     def log_performance(self, timestamp):
         """Records the current total portfolio value at a given timestamp."""
         new_row = pd.DataFrame([{'timestamp': timestamp, 'total_value': self.total_value}])
-        # The FutureWarning is from pandas and is safe to ignore for this use case.
-        # It's recommending a different way to concat, but the current way works fine.
         self.history = pd.concat([self.history, new_row], ignore_index=True)
 
     def on_fill(self, fill_event: dict):

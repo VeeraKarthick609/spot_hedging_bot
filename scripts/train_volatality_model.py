@@ -6,7 +6,6 @@ import asyncio
 import os
 import matplotlib.pyplot as plt
 
-# Assuming this script is run from the 'scripts' directory
 # The path to the core directory where the model will be saved
 MODEL_OUTPUT_PATH = "../core/garch_model.pkl"
 
