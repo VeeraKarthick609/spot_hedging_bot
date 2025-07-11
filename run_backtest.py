@@ -5,8 +5,8 @@ def main():
     # --- 1. Load Data ---
     print("Loading historical data...")
     try:
-        spot_data = pd.read_csv("./data/BTC_USDT_1h.csv", parse_dates=['timestamp'])
-        perp_data = pd.read_csv("./data/BTC_USDT_USDT_1h.csv", parse_dates=['timestamp'])
+        spot_data = pd.read_csv("./data/BTC_USDT_1d.csv", parse_dates=['timestamp'])
+        perp_data = pd.read_csv("./data/BTC_USDT_USDT_1d.csv", parse_dates=['timestamp'])
     except FileNotFoundError:
         print("Error: Data files not found. Please run 'scripts/download_data.py' first.")
         return
