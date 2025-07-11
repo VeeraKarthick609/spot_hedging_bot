@@ -73,11 +73,6 @@ Before running the bot for the first time, you need to download historical data 
     ```
     *(This will run an out-of-sample evaluation and display a chart. Close the chart to allow the script to finish and save the model.)*
 
-4.  **Train the Timing Model:**
-    ```bash
-    python train_timing_model.py
-    ```
-
 ### 5. Running the Bot
 
 1.  **Navigate back to the project root:**
